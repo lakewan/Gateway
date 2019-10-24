@@ -61,6 +61,8 @@ comm_list=[]  #网关数组
 controller_list=[]   #控制器数组
 sensor_list=[] #传感器数据
 conn_list = []#客户端连接信息，端口号，地址，序列号，超时时间
+unknow_list = []
+
 
 recv_thread=[] #连接线程数组
 send_thread=[] #发指令线程数组
@@ -133,6 +135,12 @@ class conn_class():
         self.overtime = overtime        #超时时间 
         self.state=taskstate            #任务状态，0-无任务，1-有任务(水肥机)
         self.isonline=isonline          #是否在线 0-不在线，1-在线
+        
+class unknow_class():
+    def __init__(self,sock,addr,linktimes):
+        self.sock = sock                #连接sock
+        self.addr = addr                #连接IP
+        self.linktimes = linktimes    #设备序列号   
      
 #生成MySQL连接池        
 try:
@@ -238,16 +246,21 @@ def PLC_handlerecv(comm_index,sdata):
     temp2=sdata[-4:]
     a=mymodule.crc16(temp1,0).replace(' ','')
     passnum=comm_list[comm_index].passnum
-    if a==temp2.replace(' ','') or a==temp2.upper().replace(' ',''):
+    if True:
         sOrder=sdata[2:4]
         #获取记录
         try:
             if sOrder == '03' and len(sdata)<=1024:
-                pass
+                print(sdata)
 
-            elif sOrder == '0f':
-                dataset=sdata[14:-4]
-                lendata=int(sdata[8:12],16)
+            elif sOrder == '0f' or (sOrder == '05' and sdata[16:20]=='020f' ):
+                if sOrder == '0f':           
+                #0000201910180001 020503e8ff000c79 020f 0c50(addr) 0010(out num) 02(byte num) 3f02(数据) a6b1指令回传
+                    lendata=int(sdata[8:12],16)
+                    dataset=sdata[14:-4]
+                elif sOrder == '05' and sdata[16:20]=='020f':
+                    lendata=int(sdata[24:28],16)
+                    dataset=sdata[30:-4]
                 if lendata > 0:
                     sSQL="insert into yw_d_controller_tbl(id,Code,PortNum,Commucation_ID,onoff) values "
                     try:
@@ -259,8 +272,7 @@ def PLC_handlerecv(comm_index,sdata):
                             tempa=dataset[i*2:i*2+2] #注意modbus标准版和矩形modbus区别，modbus按顺序
                             tempb=tempb+('00000000'+bin(int(tempa,16)).replace('0b',''))[-8:][::-1]
                             statusvar=tempb
-                        
-                        for i in range(0,passnum):
+                        for i in range(0,lendata):
                             control_index= find_devaddr(i+1,comm_sn,10)
                             if control_index >=0:
                                 if controller_list[control_index].devtype=='1':  
@@ -282,8 +294,6 @@ def PLC_handlerecv(comm_index,sdata):
                                         sstate='3' #停   
                                     else:
                                         print('state unnomal')
- 
-    
                                 sSQL = sSQL+"('"+str(controller_list[control_index].devid)+"','"+str(controller_list[control_index].devcode)+"',"
                                 sSQL = sSQL+"'"+str(controller_list[control_index].devaddr)+"',"
                                 sSQL = sSQL+"'"+str(controller_list[control_index].commnum)+"','"+sstate+"'),"
@@ -292,15 +302,16 @@ def PLC_handlerecv(comm_index,sdata):
                         mymodule.create_log(showinfo)
     
                     try:
-                        sSQL=sSQL[0:-1]+" ON DUPLICATE KEY UPDATE onoff = values(onoff);"    
-                        staconn=mysqlpool.connection()
-                        stacursor=staconn.cursor()
-                        showinfo=mymodule.getcurrtime() + ' Get PLC(' + comm_sn + ')'+ ' device state : '  + sSQL
-                        mymodule.create_log(showinfo) 
-                        stacursor.execute(sSQL)
-                        staconn.commit() 
-                        stacursor.close()
-                        staconn.close()    
+                        if sSQL[-2:] =='),':
+                            sSQL=sSQL[0:-1]+" ON DUPLICATE KEY UPDATE onoff = values(onoff);"    
+                            staconn=mysqlpool.connection()
+                            stacursor=staconn.cursor()
+                            showinfo=mymodule.getcurrtime() + ' Get PLC(' + comm_sn + ')'+ ' device state : '  + sSQL
+                            mymodule.create_log(showinfo) 
+                            stacursor.execute(sSQL)
+                            staconn.commit() 
+                            stacursor.close()
+                            staconn.close()    
                     except Exception as err:
                         showinfo =mymodule.getcurrtime()+ ' PLC('+comm_sn + ') update control status failture:'+str(err)
                         mymodule.create_log(showinfo)
@@ -318,32 +329,14 @@ def PLC_sendorder(dev_index,comm_index,conn_index,onedata):
     sendtimes=0
     sendresult=''
     while True:
-        if onedata != None:
-            if onedata[2] == 'AC-OPEN':
-                if  onedata[3] :
-                    if int(onedata[3]) > 0:
-                        sleep(int(onedata[3])) #延迟
-                if dev_index >=0 and conn_list[conn_index].isonline == 1:
-                    if controller_list[dev_index].devtype=='1':
-                        sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:]
-                        sendstr = sendstr + ' ' + '05'
-                        scontlnum = ('0000'+hex(icontlnum-1+2000).replace('0x',''))[-4:]
-                        sendstr = sendstr +' '+  scontlnum[:2] + ' '+scontlnum[-2:]     #起始地址
-                        sendstr = sendstr +' '+ 'FF 00' #输出数量+字节数+输出值
-                        sendstr = sendstr +' '+ mymodule.crc16(sendstr,0)
-                        sendstr=sendstr.replace(' ','')
-                        sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
-                    elif controller_list[dev_index].devtype=='3':
-                        sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:]
-                        sendstr = sendstr + ' ' + '05'
-                        scontlnum = ('0000'+hex(icontlnum+5000).replace('0x',''))[-4:]
-                        sendstr = sendstr +' '+  scontlnum[:2] + ' '+scontlnum[-2:]     #起始地址
-                        sendstr = sendstr +' '+ 'FF 00' #输出数量+字节数+输出值
-                        sendstr = sendstr +' '+ mymodule.crc16(sendstr,0)
-                        sendstr=sendstr.replace(' ','')
-                        sendresult1=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
-                        if sendresult1 == None:
-                            sleep(1)
+        try:
+            if onedata != None:
+                if onedata[2] == 'AC-OPEN':
+                    if onedata[3] != None and onedata[3] != 'NULL':
+                        if int(onedata[3]) > 0:
+                            sleep(int(onedata[3])) #延迟
+                    if dev_index >=0 and conn_list[conn_index].isonline == 1:
+                        if controller_list[dev_index].devtype=='1':
                             sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:]
                             sendstr = sendstr + ' ' + '05'
                             scontlnum = ('0000'+hex(icontlnum-1+2000).replace('0x',''))[-4:]
@@ -351,85 +344,8 @@ def PLC_sendorder(dev_index,comm_index,conn_index,onedata):
                             sendstr = sendstr +' '+ 'FF 00' #输出数量+字节数+输出值
                             sendstr = sendstr +' '+ mymodule.crc16(sendstr,0)
                             sendstr=sendstr.replace(' ','')
-                            sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ',''))) 
-                    if sendresult== None:
-                        showinfo=mymodule.getcurrtime()+' '+'PLC('+comm_sn+ ')'+ ' '+deviceno+' '+'OPEN: '+sendstr
-                        mymodule.create_log(showinfo)
-                        break
-                    else:
-                        sleep(60)
-                        showinfo=mymodule.getcurrtime()+' '+'PLC('+comm_sn+ ')'+ ' '+deviceno+' '+'OPEN: '+sendstr+ ' failed times:' + str(sendtimes)
-                        sendtimes=sendtimes+1
-                             
-            elif  onedata[2] == 'AC-CLOSE':
-                if  onedata[3] :
-                    if int(onedata[3]) > 0:
-                        sleep(int(onedata[3])) 
-                if dev_index >=0 and conn_list[conn_index].isonline == 1:
-                    if controller_list[dev_index].devtype=='1':
-                        sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:]
-                        sendstr = sendstr + ' ' + '05'
-                        scontlnum = ('0000'+hex(icontlnum-1+5000).replace('0x',''))[-4:]
-                        sendstr = sendstr +' '+  scontlnum[:2] + ' '+scontlnum[-2:]     #起始地址
-                        sendstr = sendstr +' '+ 'FF 00' #输出数量+字节数+输出值
-                        sendstr = sendstr +' '+ mymodule.crc16(sendstr,0)
-                        sendstr=sendstr.replace(' ','')
-                        sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
-                    elif controller_list[dev_index].devtype=='3':
-                        sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:]
-                        sendstr = sendstr + ' ' + '05'
-                        scontlnum = ('0000'+hex(icontlnum-1+5000).replace('0x',''))[-4:]
-                        sendstr = sendstr +' '+  scontlnum[:2] + ' '+scontlnum[-2:]     #起始地址
-                        sendstr = sendstr +' '+ 'FF 00' #输出数量+字节数+输出值
-                        sendstr = sendstr +' '+ mymodule.crc16(sendstr,0)
-                        sendstr=sendstr.replace(' ','')
-                        sendresult1=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
-                        if sendresult1 == None:
-                            sleep(1)
-                            sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:]
-                            sendstr = sendstr + ' ' + '05'
-                            scontlnum = ('0000'+hex(icontlnum+2000).replace('0x',''))[-4:]
-                            sendstr = sendstr +' '+  scontlnum[:2] + ' '+scontlnum[-2:]     #起始地址
-                            sendstr = sendstr +' '+ 'FF 00' #输出数量+字节数+输出值
-                            sendstr = sendstr +' '+ mymodule.crc16(sendstr,0)
-                            sendstr=sendstr.replace(' ','')
                             sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
-                        
-
-                if sendresult== None:
-                    showinfo=mymodule.getcurrtime()+' '+'PLC('+comm_sn+ ')'+ ' '+deviceno+' '+'CLOSE: '+sendstr
-                    mymodule.create_log(showinfo)
-                    break
-                else:
-                    sleep(60)
-                    showinfo=mymodule.getcurrtime()+' '+'PLC('+comm_sn+ ')'+ ' '+deviceno+' '+'CLOSE: '+sendstr+ ' failed times:' + str(sendtimes)
-                    sendtimes=sendtimes+1
-                        
-            elif  onedata[2] == 'AC-STOP':
-                if  onedata[3] :
-                    if int(onedata[3]) > 0:
-                       sleep(int(onedata[3]))
-                if dev_index >=0  and conn_list[conn_index].isonline == 1:
-                    if controller_list[dev_index].devtype=='1':
-                        sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:]
-                        sendstr = sendstr + ' ' + '05'
-                        scontlnum = ('0000'+hex(icontlnum-1+5000).replace('0x',''))[-4:]
-                        sendstr = sendstr +' '+  scontlnum[:2] + ' '+scontlnum[-2:]     #起始地址
-                        sendstr = sendstr +' '+ 'FF 00' #输出数量+字节数+输出值
-                        sendstr = sendstr +' '+ mymodule.crc16(sendstr,0)
-                        sendstr=sendstr.replace(' ','')
-                        sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
-                    elif controller_list[dev_index].devtype=='3':
-                        sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:]
-                        sendstr = sendstr + ' ' + '05'
-                        scontlnum = ('0000'+hex(icontlnum-1+5000).replace('0x',''))[-4:]
-                        sendstr = sendstr +' '+  scontlnum[:2] + ' '+scontlnum[-2:]     #起始地址
-                        sendstr = sendstr +' '+ 'FF 00' #输出数量+字节数+输出值
-                        sendstr = sendstr +' '+ mymodule.crc16(sendstr,0)
-                        sendstr=sendstr.replace(' ','')
-                        sendresult1=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
-                        if sendresult1 == None:
-                            sleep(1)
+                        elif controller_list[dev_index].devtype=='3':
                             sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:]
                             sendstr = sendstr + ' ' + '05'
                             scontlnum = ('0000'+hex(icontlnum+5000).replace('0x',''))[-4:]
@@ -437,32 +353,140 @@ def PLC_sendorder(dev_index,comm_index,conn_index,onedata):
                             sendstr = sendstr +' '+ 'FF 00' #输出数量+字节数+输出值
                             sendstr = sendstr +' '+ mymodule.crc16(sendstr,0)
                             sendstr=sendstr.replace(' ','')
+                            sendresult1=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
+                            if sendresult1 == None:
+                                sleep(1)
+                                sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:]
+                                sendstr = sendstr + ' ' + '05'
+                                scontlnum = ('0000'+hex(icontlnum-1+2000).replace('0x',''))[-4:]
+                                sendstr = sendstr +' '+  scontlnum[:2] + ' '+scontlnum[-2:]     #起始地址
+                                sendstr = sendstr +' '+ 'FF 00' #输出数量+字节数+输出值
+                                sendstr = sendstr +' '+ mymodule.crc16(sendstr,0)
+                                sendstr=sendstr.replace(' ','')
+                                sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ',''))) 
+                        if sendresult== None:
+                            showinfo=mymodule.getcurrtime()+' '+'PLC('+comm_sn+ ')'+ ' '+deviceno+' '+'OPEN: '+sendstr
+                            mymodule.create_log(showinfo)
+    
+                            break
+                        else:
+                            sleep(60)
+                            showinfo=mymodule.getcurrtime()+' '+'PLC('+comm_sn+ ')'+ ' '+deviceno+' '+'OPEN: '+sendstr+ ' failed times:' + str(sendtimes)
+                            sendtimes=sendtimes+1
+                                 
+                elif  onedata[2] == 'AC-CLOSE':
+                    if onedata[3] != None and onedata[3] != 'NULL':
+                        if int(onedata[3]) > 0:
+                            sleep(int(onedata[3])) 
+                    if dev_index >=0 and conn_list[conn_index].isonline == 1:
+                        if controller_list[dev_index].devtype=='1':
+                            sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:]
+                            sendstr = sendstr + ' ' + '05'
+                            scontlnum = ('0000'+hex(icontlnum-1+5000).replace('0x',''))[-4:]
+                            sendstr = sendstr +' '+  scontlnum[:2] + ' '+scontlnum[-2:]     #起始地址
+                            sendstr = sendstr +' '+ 'FF 00' #输出数量+字节数+输出值
+                            sendstr = sendstr +' '+ mymodule.crc16(sendstr,0)
+                            sendstr=sendstr.replace(' ','')
                             sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
-                if sendresult== None:
-                    showinfo=mymodule.getcurrtime()+' '+'PLC('+comm_sn+ ')'+ ' '+deviceno+' '+'STOP: '+sendstr
-                    mymodule.create_log(showinfo)
-                    break
-                else:
-                    sleep(60)
-                    showinfo=mymodule.getcurrtime()+' '+'PLC('+comm_sn+ ')'+ ' '+deviceno+' '+'STOP: '+sendstr+ ' failed times:' + str(sendtimes)
-                    sendtimes=sendtimes+1
-                    
-                    
-            elif  onedata[2] == 'INTERVAL':
-                if onedata[3] : 
-                    if int(onedata[3]) > 0:
-                        sleep(int(onedata[3]))
-                else:
-                    showinfo=mymodule.getcurrtime()+' '+'PLC('+comm_sn+ ')'+ ' '+onedata[0]+' '+'SET STATUS:'+str(onedata[4])
-                    mymodule.create_log(showinfo)
-            if sendtimes > 3:
-                mymodule.create_log(showinfo)
-                showinfo=mymodule.getcurrtime()+' '+'PLC('+comm_sn + ')'+' '+ deviceno+' shutdown for send over 3 times '
-                mymodule.create_log(showinfo)
-                break
+                        elif controller_list[dev_index].devtype=='3':
+                            sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:]
+                            sendstr = sendstr + ' ' + '05'
+                            scontlnum = ('0000'+hex(icontlnum-1+5000).replace('0x',''))[-4:]
+                            sendstr = sendstr +' '+  scontlnum[:2] + ' '+scontlnum[-2:]     #起始地址
+                            sendstr = sendstr +' '+ 'FF 00' #输出数量+字节数+输出值
+                            sendstr = sendstr +' '+ mymodule.crc16(sendstr,0)
+                            sendstr=sendstr.replace(' ','')
+                            sendresult1=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
+                            if sendresult1 == None:
+                                sleep(1)
+                                sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:]
+                                sendstr = sendstr + ' ' + '05'
+                                scontlnum = ('0000'+hex(icontlnum+2000).replace('0x',''))[-4:]
+                                sendstr = sendstr +' '+  scontlnum[:2] + ' '+scontlnum[-2:]     #起始地址
+                                sendstr = sendstr +' '+ 'FF 00' #输出数量+字节数+输出值
+                                sendstr = sendstr +' '+ mymodule.crc16(sendstr,0)
+                                sendstr=sendstr.replace(' ','')
+                                sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
+                            
+    
+                    if sendresult== None:
+                        showinfo=mymodule.getcurrtime()+' '+'PLC('+comm_sn+ ')'+ ' '+deviceno+' '+'CLOSE: '+sendstr
+                        mymodule.create_log(showinfo)
+                        break
+                    else:
+                        sleep(60)
+                        showinfo=mymodule.getcurrtime()+' '+'PLC('+comm_sn+ ')'+ ' '+deviceno+' '+'CLOSE: '+sendstr+ ' failed times:' + str(sendtimes)
+                        sendtimes=sendtimes+1
+                            
+                elif  onedata[2] == 'AC-STOP':
+                    if onedata[3] != None and onedata[3] != 'NULL':
+                        if int(onedata[3]) > 0 :
+                           sleep(int(onedata[3]))
+                    if dev_index >=0  and conn_list[conn_index].isonline == 1:
+                        if controller_list[dev_index].devtype=='1':
+                            sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:]
+                            sendstr = sendstr + ' ' + '05'
+                            scontlnum = ('0000'+hex(icontlnum-1+5000).replace('0x',''))[-4:]
+                            sendstr = sendstr +' '+  scontlnum[:2] + ' '+scontlnum[-2:]     #起始地址
+                            sendstr = sendstr +' '+ 'FF 00' #输出数量+字节数+输出值
+                            sendstr = sendstr +' '+ mymodule.crc16(sendstr,0)
+                            sendstr=sendstr.replace(' ','')
+                            sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
+                        elif controller_list[dev_index].devtype=='3':
+                            sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:]
+                            sendstr = sendstr + ' ' + '05'
+                            scontlnum = ('0000'+hex(icontlnum-1+5000).replace('0x',''))[-4:]
+                            sendstr = sendstr +' '+  scontlnum[:2] + ' '+scontlnum[-2:]     #起始地址
+                            sendstr = sendstr +' '+ 'FF 00' #输出数量+字节数+输出值
+                            sendstr = sendstr +' '+ mymodule.crc16(sendstr,0)
+                            sendstr=sendstr.replace(' ','')
+                            sendresult1=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
+                            if sendresult1 == None:
+                                sleep(1)
+                                sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:]
+                                sendstr = sendstr + ' ' + '05'
+                                scontlnum = ('0000'+hex(icontlnum+5000).replace('0x',''))[-4:]
+                                sendstr = sendstr +' '+  scontlnum[:2] + ' '+scontlnum[-2:]     #起始地址
+                                sendstr = sendstr +' '+ 'FF 00' #输出数量+字节数+输出值
+                                sendstr = sendstr +' '+ mymodule.crc16(sendstr,0)
+                                sendstr=sendstr.replace(' ','')
+                                sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
+                    if sendresult== None:
+                        showinfo=mymodule.getcurrtime()+' '+'PLC('+comm_sn+ ')'+ ' '+deviceno+' '+'STOP: '+sendstr
+                        mymodule.create_log(showinfo)
+                        break
+                    else:
+                        sleep(60)
+                        showinfo=mymodule.getcurrtime()+' '+'PLC('+comm_sn+ ')'+ ' '+deviceno+' '+'STOP: '+sendstr+ ' failed times:' + str(sendtimes)
+                        sendtimes=sendtimes+1
+                        
+                        
+                elif  onedata[2] == 'INTERVAL':
+                    if onedata[3] != None  and onedata[3] != 'NULL':
+                        if int(onedata[3]) > 0 :
+                            sleep(int(onedata[3]))
+                    else:
+                        showinfo=mymodule.getcurrtime()+' '+'PLC('+comm_sn+ ')'+ ' '+onedata[0]+' '+'SET STATUS:'+str(onedata[4])
+                        mymodule.create_log(showinfo)
+        except Exception as err:
+            showinfo =mymodule.getcurrtime()+  ' PLC('+comm_sn + ') send order failture : '+str(err)
+            mymodule.create_log(showinfo)
+            sendtimes=sendtimes+1
+        if sendtimes > 3:
+            mymodule.create_log(showinfo)
+            showinfo=mymodule.getcurrtime()+' '+'PLC('+comm_sn + ')'+' '+ deviceno+' shutdown for send over 3 times '
+            mymodule.create_log(showinfo)        
+    reslSQL='update yw_c_control_log_tbl set ExecuteTime=%s,ExecuteResult=%s where id = "' + str(onedata[0]) + '"'
+    reslconn=mysqlpool.connection()
+    reslcursor=reslconn.cursor()
+    reslcursor.execute(reslSQL,args=(datetime.now().strftime('%Y-%m-%d %H:%M:%S'),'4'))
+    reslconn.commit() 
+    reslcursor.close()
+    reslconn.close()
 
 def KLC_handlerecv(comm_index,sdata):
     comm_sn=comm_list[comm_index].serial_num
+    print('start fkc compute'+sdata)
     #sdata='010320018367de022304e90233000103238fb0033309d81423aa8b143300060483666c'
     lenofdata=int(sdata[4:6],16)*2
     datatemp=sdata[6:]
@@ -473,7 +497,7 @@ def KLC_handlerecv(comm_index,sdata):
             showinfo = mymodule.getcurrtime()+' KLC('+comm_sn + ') receive sensor data:'+sdata
             mymodule.create_log(showinfo)
             if sOrder == '03' and sdata[0:2] == "01" :
-                sSQL="INSERT INTO yw_c_sensordata_tbl (Device_ID,Device_Code,ReportTime,ReportValue,Block_ID) values"
+                sSQL="INSERT INTO yw_c_sensordata_tbl (Device_ID,Device_Code,ReportTime,ReportValue,Block_ID) values "
                 for i in range(0,8):
                     sensordata = datatemp[0:8]
                     datatemp=datatemp[8:]
@@ -565,8 +589,8 @@ def KLC_handlerecv(comm_index,sdata):
 
                #####     
                 try:
-                    sSQL=sSQL[0:-1]+";"
-                    if sSQL[-2:] ==');':
+                    if sSQL[-2:] =='),':
+                        sSQL=sSQL[0:-1]+";"
                         comtconn=mysqlpool.connection()
                         comtcursor=comtconn.cursor()
                         comtcursor.execute(sSQL)
@@ -604,15 +628,16 @@ def KLC_handlerecv(comm_index,sdata):
                     mymodule.create_log(showinfo)
 
                 try:
-                    sSQL=sSQL[0:-1]+" ON DUPLICATE KEY UPDATE onoff = values(onoff);"    
-                    staconn=mysqlpool.connection()
-                    stacursor=staconn.cursor()
-                    showinfo=mymodule.getcurrtime() + ' Get (' + comm_sn + ')'+ ' device state : '  + sSQL
-                    mymodule.create_log(showinfo) 
-                    stacursor.execute(sSQL)
-                    staconn.commit() 
-                    stacursor.close()
-                    staconn.close()    
+                    if sSQL[-2:] =='),':
+                        sSQL=sSQL[0:-1]+" ON DUPLICATE KEY UPDATE onoff = values(onoff);"    
+                        staconn=mysqlpool.connection()
+                        stacursor=staconn.cursor()
+                        showinfo=mymodule.getcurrtime() + ' Get (' + comm_sn + ')'+ ' device state : '  + sSQL
+                        mymodule.create_log(showinfo) 
+                        stacursor.execute(sSQL)
+                        staconn.commit() 
+                        stacursor.close()
+                        staconn.close()    
                 except Exception as err:
                     showinfo =mymodule.getcurrtime()+ ' KLC('+comm_sn + ') update control status failture : '+str(err)
                     mymodule.create_log(showinfo)
@@ -629,107 +654,117 @@ def KLC_sendorder(dev_index,comm_index,conn_index,onedata):
     sock=conn_list[conn_index].sock
     sendtimes=0
     while True:
-        if onedata[2] == 'AC-OPEN':
-            if  onedata[3]:
-                if int(onedata[3]) > 0:
-                    sleep(int(onedata[3]))
-            if dev_index >=0 and conn_list[conn_index].isonline == 1:
-                sendstr = '15 01 00 00 00 0B 02 10'
-                if icontlnum==1:
-                    sendstr = sendstr + ' ' +  '00 00'
-                elif icontlnum==2: 
-                    sendstr = sendstr + ' ' +  '00 02'
-                sendstr = sendstr + ' ' +'00 02 04'
-                sendstr = sendstr + ' ' + 'A' + str(icontlnum) +' ' +'40 FF FF'
-                sendstr = sendstr +' '+ mymodule.crc16(sendstr,0) 
-                sendstr=sendstr.replace(' ','')
-                sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
-                if sendresult == None:
-                    showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn+ ')'+ ' '+deviceno+' '+'OPEN : '+sendstr
+        try:
+            if onedata[2] == 'AC-OPEN':
+                if onedata[3] != None and onedata[3] != 'NULL':
+                    if int(onedata[3]) > 0 :
+                        sleep(int(onedata[3]))
+                if dev_index >=0 and conn_list[conn_index].isonline == 1:
+                    sendstr = '15 01 00 00 00 0B 02 10'
+                    if icontlnum==1:
+                        sendstr = sendstr + ' ' +  '00 00'
+                    elif icontlnum==2: 
+                        sendstr = sendstr + ' ' +  '00 02'
+                    sendstr = sendstr + ' ' +'00 02 04'
+                    sendstr = sendstr + ' ' + 'A' + str(icontlnum) +' ' +'40 FF FF'
+                    sendstr = sendstr +' '+ mymodule.crc16(sendstr,0) 
+                    sendstr=sendstr.replace(' ','')
+                    sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
+                    if sendresult == None:
+                        showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn+ ')'+ ' '+deviceno+' '+'OPEN : '+sendstr
+                        mymodule.create_log(showinfo)
+                        sleep(0.5)
+                        break
+                    else:
+                        sleep(60)
+                        showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn+ ')'+ ' '+deviceno+' '+'OPEN : '+sendstr + ' failed times:' + str(sendtimes)
+                        sendtimes=sendtimes+1
+                             
+            elif  onedata[2] == 'AC-CLOSE':
+                if onedata[3] != None and onedata[3] != 'NULL':
+                    if int(onedata[3]) > 0:
+                        sleep(int(onedata[3]))
+                if dev_index >=0 and conn_list[conn_index].isonline == 1:
+                    sendstr = '15 01 00 00 00 0B 02 10'
+                    if icontlnum==1:
+                        sendstr = sendstr + ' ' +  '00 00'
+                    elif icontlnum==2: 
+                        sendstr = sendstr + ' ' +  '00 02'
+                    sendstr = sendstr + ' ' +'00 02 04'
+                    sendstr = sendstr + ' ' + 'A' + str(icontlnum) +' ' +'40 00 00'
+                    sendstr = sendstr +' '+ mymodule.crc16(sendstr,0) 
+         
+                    sendstr=sendstr.replace(' ','')
+                    sendresult = sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
+                    
+                    if sendresult == None:
+                        showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn+ ')'+ ' '+deviceno+' '+'CLOSE : ' + sendstr
+                        mymodule.create_log(showinfo)
+                        sleep(0.5) 
+                        break
+                    else:
+                        sleep(60)
+                        showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn+ ')'+ ' '+deviceno+' '+'CLOSE : '+ sendstr + ' failed times:' + str(sendtimes)
+                        sendtimes=sendtimes+1            
+               
+            elif  onedata[2] == 'INTERVAL':
+                if onedata[3] != None and onedata[3] != 'NULL':
+                    if int(onedata[3]) > 0:
+                        sleep(int(onedata[3]))
+                if conn_list[conn_index].isonline == 1:
+                    showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn+ ')'+ ' '+onedata[0]+' '+'SET STATUS : '+str(onedata[4])
                     mymodule.create_log(showinfo)
                     sleep(0.5)
-                    break
-                else:
-                    sleep(60)
-                    showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn+ ')'+ ' '+deviceno+' '+'OPEN : '+sendstr + ' failed times:' + str(sendtimes)
-                    sendtimes=sendtimes+1
-                         
-        elif  onedata[2] == 'AC-CLOSE':
-            if  onedata[3]:
-                if int(onedata[3]) > 0:
-                    sleep(int(onedata[3]))
-            if dev_index >=0 and conn_list[conn_index].isonline == 1:
-                sendstr = '15 01 00 00 00 0B 02 10'
-                if icontlnum==1:
-                    sendstr = sendstr + ' ' +  '00 00'
-                elif icontlnum==2: 
-                    sendstr = sendstr + ' ' +  '00 02'
-                sendstr = sendstr + ' ' +'00 02 04'
-                sendstr = sendstr + ' ' + 'A' + str(icontlnum) +' ' +'40 00 00'
-                sendstr = sendstr +' '+ mymodule.crc16(sendstr,0) 
-     
-                sendstr=sendstr.replace(' ','')
-                sendresult = sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
-                
-                if sendresult == None:
-                    showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn+ ')'+ ' '+deviceno+' '+'CLOSE : ' + sendstr
-                    mymodule.create_log(showinfo)
-                    sleep(0.5) 
-                    break
-                else:
-                    sleep(60)
-                    showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn+ ')'+ ' '+deviceno+' '+'CLOSE : '+ sendstr + ' failed times:' + str(sendtimes)
-                    sendtimes=sendtimes+1            
-           
-        elif  onedata[2] == 'INTERVAL':
-            if onedata[3]: 
-                if int(onedata[3]) > 0:
-                    sleep(int(onedata[3]))
-            if conn_list[conn_index].isonline == 1:
-                showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn+ ')'+ ' '+onedata[0]+' '+'SET STATUS : '+str(onedata[4])
-                mymodule.create_log(showinfo)
-                sleep(0.5)
-        elif  onedata[2] == 'GETSTATE':
-            if onedata[3]: 
-                if int(onedata[3]) > 0:
-                    sleep(int(onedata[3]))
-            if conn_list[conn_index].isonline == 1:
-                sendstr= '15 01 00 00 00 06 02'
-                sendstr=sendstr+' '+ '03'
-                sendstr=sendstr+' '+ '00 00' #
-                sendstr=sendstr+' '+ '00 04' #
-                sendstr=sendstr+' '+ mymodule.crc16(sendstr,0)
-                sendstr=sendstr.replace(' ','')
-                sendresult = sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
-                if sendresult == None:
-                    showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn + ')'+' '+ deviceno+' GET STATUS : '+sendstr
-                    mymodule.create_log(showinfo)
-                    sleep(0.5)
-                    break
-                else:
-                    sleep(60)
-                    showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn + ')'+' '+ deviceno+' GET STATUS : '+sendstr+ ' failed times:' + str(sendtimes)
-                    sendtimes=sendtimes+1
-        else:
-            showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn + ')'+' '+ deviceno+' unknow order : '+ onedata[2]
+            elif  onedata[2] == 'GETSTATE':
+                if onedata[3] != None and onedata[3] != 'NULL':
+                    if int(onedata[3]) > 0:
+                        sleep(int(onedata[3]))
+                if conn_list[conn_index].isonline == 1:
+                    sendstr= '15 01 00 00 00 06 02'
+                    sendstr=sendstr+' '+ '03'
+                    sendstr=sendstr+' '+ '00 00' #
+                    sendstr=sendstr+' '+ '00 04' #
+                    sendstr=sendstr+' '+ mymodule.crc16(sendstr,0)
+                    sendstr=sendstr.replace(' ','')
+                    sendresult = sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
+                    if sendresult == None:
+                        showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn + ')'+' '+ deviceno+' GET STATUS : '+sendstr
+                        mymodule.create_log(showinfo)
+                        sleep(0.5)
+                        break
+                    else:
+                        sleep(60)
+                        showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn + ')'+' '+ deviceno+' GET STATUS : '+sendstr+ ' failed times:' + str(sendtimes)
+                        sendtimes=sendtimes+1
+            else:
+                showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn + ')'+' '+ deviceno+' unknow order : '+ onedata[2]
+                sendtimes=sendtimes+1
+        except Exception as err:
+            showinfo =mymodule.getcurrtime()+  ' KLC('+comm_sn + ') send order failture : '+str(err)
+            mymodule.create_log(showinfo)
             sendtimes=sendtimes+1
         if sendtimes > 3:
             mymodule.create_log(showinfo)
             showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn + ')'+' '+ deviceno+' shutdown for send over 3 times '
             mymodule.create_log(showinfo)
             break
-            
-        
-
+    reslSQL='update yw_c_control_log_tbl set ExecuteTime=%s,ExecuteResult=%s where id = "' + str(onedata[0]) + '"'
+    reslconn=mysqlpool.connection()
+    reslcursor=reslconn.cursor()
+    reslcursor.execute(reslSQL,args=(datetime.now().strftime('%Y-%m-%d %H:%M:%S'),'4'))
+    reslconn.commit() 
+    reslcursor.close()
+    reslconn.close()        
 def SFJ_handlerecv(comm_index,sdata):
     commtype=comm_list[comm_index].commtype
     comm_sn=comm_list[comm_index].serial_num
     temp1=sdata[:-4]
     temp2=sdata[-4:]
     a=mymodule.crc16(temp1,0).replace(' ','')
-    if a==temp2.replace(' ','') or a==temp2.upper().replace(' ',''):
+    #if a==temp2.replace(' ','') or a==temp2.upper().replace(' ',''):
+    if True:
         sOrder=sdata[2:4]
-        #获取记录
+        
         try:
             if sOrder == '10':
                 tasklog=[]
@@ -810,6 +845,7 @@ def SFJ_handlerecv(comm_index,sdata):
                     sResult = sResult +"T_Fertilize,R_State,T_Date,T_ID,T_Type,Company_ID,PLC_Number,DO_Type) "
                     sResult = sResult + "values('"+starttime+"','"+endtime+"','"+str(interval_real)+"','"+str(water_real)+"','"+str(ferter_real)+"','"+sArea+"',"
                     sResult = sResult + "'"+sFertcomm+"','"+str(taskstate)+"','"+taskdate+"','"+str(taskid)+"','"+str(tasktype)+"','"+scommpany+"','"+comm_sn+"','"+str(isRemote)+"')"
+                    
                     reslcursor.execute(sResult) 
                     reslconn.commit()
                     reslcursor.close()
@@ -817,9 +853,11 @@ def SFJ_handlerecv(comm_index,sdata):
                     showinfo=mymodule.getcurrtime()+' '+'SFC('+comm_sn + ')'+' '+ 'add a new task log'
                     mymodule.create_log(showinfo)
                     sleep(0.5)
-                       
+            #0000201910180001 020503e8ff000c79 020f0c500010023f02a6b1指令回传
+            #获取记录           
             #获取状态             
-            if sOrder == '0f':
+            if sOrder == '0f' or (sOrder == '05' and sdata[16:20]=='020f' ):
+                
                 sState=''
                 bState=''
                 devid=[]
@@ -849,6 +887,7 @@ def SFJ_handlerecv(comm_index,sdata):
                     if dev_index >=0:
                         sSQL = sSQL+"('"+str(devid[dev_index])+"','"+str(bState[i])+"'),"
                 try:
+                    
                     if sSQL[-2:] =='),':
                         sSQL=sSQL[0:-1]+" ON DUPLICATE KEY UPDATE state = values(state);"    
                         staconn=mysqlpool.connection()
@@ -864,8 +903,6 @@ def SFJ_handlerecv(comm_index,sdata):
         except Exception as err:
             showinfo = mymodule.getcurrtime()+' '+'SFC('+comm_sn + ')'+' '+ 'receive data failed : '+str(err)
             mymodule.create_log(showinfo)
-            
-            
 def SFJ_sendorder(devtype,onedata):
     sendtimes=0
     while True:
@@ -873,7 +910,7 @@ def SFJ_sendorder(devtype,onedata):
         conn_index=find_conn_sn(comm_sn)
         if devtype ==0 and conn_list[conn_index].isonline == 1:#手动控制
             try:
-                #指令id,设备id，指令名称，设备地址，预计时间，下发时间，网关序号,设备地址   
+                #指令id,设备id，指令名称，设备地址，预计时间，下发时间，网关序号,PLC地址   
                 if onedata !=None:
                     orderId=onedata[0]
                     orderAct=onedata[2]
@@ -881,7 +918,6 @@ def SFJ_sendorder(devtype,onedata):
                     plcAddr=onedata[7]
                    
                     sock=conn_list[conn_index].sock
-                    
                     if orderAct == 'AC-OPEN':
                         sOrder=('00'+hex(int(plcAddr,10)).replace('0x',''))[-2:]
                         sOrder= sOrder+' '+'05'
@@ -893,7 +929,7 @@ def SFJ_sendorder(devtype,onedata):
                         #sendresult=clientsock.sendall(sOrder.decode('hex'))
                         sendresult=sock.sendall(bytes().fromhex(sOrder))
                         if sendresult == None:
-                            showinfo=mymodule.getcurrtime()+' '+'PLC('+comm_sn + ')'+' '+ onedata[5]+' '+'OPEN : '+sOrder
+                            showinfo=mymodule.getcurrtime()+' '+'SFJ('+comm_sn + ')'+' '+ onedata[5].strftime('%Y-%m-%d %H:%M:%S')+' '+'OPEN : '+sOrder
                             mymodule.create_log(showinfo)
                             sleep(0.5)
                             break
@@ -910,7 +946,7 @@ def SFJ_sendorder(devtype,onedata):
                         sOrder=sOrder.replace(' ','')
                         sendresult=sock.sendall(bytes().fromhex(sOrder))
                         if sendresult == None:
-                            showinfo=mymodule.getcurrtime()+' '+'SFC('+comm_sn + ')'+' '+ onedata[5]+' '+'CLOSE : '+sOrder
+                            showinfo=mymodule.getcurrtime()+' '+'SFJ('+comm_sn + ')'+' '+ onedata[5].strftime('%Y-%m-%d %H:%M:%S')+' '+'CLOSE : '+sOrder
                             mymodule.create_log(showinfo)
                             sleep(0.5)
                             break
@@ -919,20 +955,27 @@ def SFJ_sendorder(devtype,onedata):
                             sleep(60)
                     else:
                         sendtimes=sendtimes+1
-                        showinfo=mymodule.getcurrtime()+' '+'SFC('+comm_sn + ')'+' '+ onedata[5]+' '+'error order type : '+orderAct
+                        showinfo=mymodule.getcurrtime()+' '+'SFC('+comm_sn + ')'+' '+ onedata[5].strftime('%Y-%m-%d %H:%M:%S')+' '+'error order type : '+orderAct
                         mymodule.create_log(showinfo)
             except Exception as e:
                 sendtimes=sendtimes+1
-                showinfo=mymodule.getcurrtime() + ' send device order(' + comm_sn + ')'+ +' '+ onedata[5] + 'failed : '   +str(e)
+                showinfo=mymodule.getcurrtime() + ' send device order(' + comm_sn + ')'+ +' '+ onedata[5].strftime('%Y-%m-%d %H:%M:%S') + 'failed : '   +str(e)
                 mymodule.create_log(showinfo)
             if sendtimes > 3:
                 break
+            reslSQL='update yw_c_control_log_tbl set ExecuteTime=%s,ExecuteResult=%s where id = "' + str(onedata[0]) + '"'
+            reslconn=mysqlpool.connection()
+            reslcursor=reslconn.cursor()
+            reslcursor.execute(reslSQL,args=(datetime.now().strftime('%Y-%m-%d %H:%M:%S'),'4'))
+            reslconn.commit() 
+            reslcursor.close()
+            reslconn.close()  
                 
         elif devtype ==1 and conn_list[conn_index].isonline == 1:  #任务      
             try:
                 #开始时间，时长，水量，肥量，区域，肥液通道,日期、类型、PLC地址、指令id、PLC序列号
                 if onedata != None:
-                    taskStart=onedata[0]        
+                    taskStart=onedata[0]       
                     taskInterval=onedata[1]
                     taskWater=onedata[2] 
                     taskFertnum=onedata[3]
@@ -967,7 +1010,7 @@ def SFJ_sendorder(devtype,onedata):
                     if commtype =='SFJ-0804':
                         tempArea=taskArea.split(',',-1)
                         for i in  tempArea:
-                            dev_index=find_devid(int(i),comm_sn,20)
+                            dev_index=find_devid(int(i),20)
                             if dev_index >=0:
                                 iArea=str(controller_list[dev_index].devaddr)+','+iArea
                         for i in range(1,9):
@@ -1058,10 +1101,17 @@ def SFJ_sendorder(devtype,onedata):
                         sleep(60)
             except Exception as e:
                 sendtimes=sendtimes+1
-                showinfo=mymodule.getcurrtime() + ' send task order(' + comm_sn + ')'+ 'failed : '   +str(e)
+                showinfo=mymodule.getcurrtime() + ' send task order SFJ(' + comm_sn + ')'+ 'failed : '   +str(e)
                 mymodule.create_log(showinfo)
             if sendtimes > 3:
-                break   
+                break
+        reslSQL='update yw_c_control_log_tbl set ExecuteTime=%s,ExecuteResult=%s where id = "' + str(onedata[9]) + '"'
+        reslconn=mysqlpool.connection()
+        reslcursor=reslconn.cursor()
+        reslcursor.execute(reslSQL,args=(datetime.now().strftime('%Y-%m-%d %H:%M:%S'),'4'))
+        reslconn.commit() 
+        reslcursor.close()
+        reslconn.close()     
 def XPC_handlerecv(comm_index,sdata):
     comm_sn=comm_list[comm_index].serial_num
     temp1=sdata[:-4]
@@ -1221,7 +1271,7 @@ def YYC_handlerecv(comm_index,sdata):
                         elif sensorformula == 'JG-D':
                             rData = format(rData,'.2f')    
                         else:
-                            showinfo =mymodule.getcurrtime()+ ' FKC('+comm_sn + ') unknow formula'
+                            showinfo =mymodule.getcurrtime()+ ' YYC('+comm_sn + ') unknow formula'
                             mymodule.create_log(showinfo)
                         if rData != '':
                             sSQL = sSQL+"('"+str(sensor_list[sensor_index].devid)+"','"+sensor_list[sensor_index].devcode+"','"+mymodule.getcurrtime()+"','"+str(rData)+"','"+str(sensor_list[sensor_index].blockid)+"'),"
@@ -1231,15 +1281,16 @@ def YYC_handlerecv(comm_index,sdata):
                         pass
  
             try:
-                sSQL=sSQL[0:-1]+";"
-                comtconn=mysqlpool.connection()
-                comtcursor=comtconn.cursor()
-                comtcursor.execute(sSQL)
-                showinfo=mymodule.getcurrtime() + ' insert (' + comm_sn + ')'+ ' sensor data : '  + sSQL
-                mymodule.create_log(showinfo)                    
-                comtconn.commit()  
-                comtcursor.close()
-                comtconn.close()
+                if sSQL[-2:] =='),':
+                    sSQL=sSQL[0:-1]+";"
+                    comtconn=mysqlpool.connection()
+                    comtcursor=comtconn.cursor()
+                    comtcursor.execute(sSQL)
+                    showinfo=mymodule.getcurrtime() + ' insert (' + comm_sn + ')'+ ' sensor data : '  + sSQL
+                    mymodule.create_log(showinfo)                    
+                    comtconn.commit()  
+                    comtcursor.close()
+                    comtconn.close()
             except Exception as err:
                 showinfo = mymodule.getcurrtime()+' '+'YYC('+comm_sn + ')'+' '+ 'insert data failed : '+str(err)
                 mymodule.create_log(showinfo)
@@ -1249,6 +1300,7 @@ def YYC_handlerecv(comm_index,sdata):
 def YYC_sendorder(dev_index,comm_index,conn_index,onedata):
     pass
 def FKC_handlerecv(comm_index,sdata):
+    #020300207fff02ea00000000000000000000000000e400de00007fff0000003f00020290f305
     comm_sn=comm_list[comm_index].serial_num
     temp1=sdata[:-4]
     temp2=sdata[-4:]
@@ -1262,9 +1314,10 @@ def FKC_handlerecv(comm_index,sdata):
                 mymodule.create_log(showinfo)
                 sSQL="INSERT INTO yw_c_sensordata_tbl (Device_ID,Device_Code,ReportTime,ReportValue,Block_ID) values"
                 for i in range(0,16):
+                    
                     hexdata = sdata[i*4+8:i*4+12]
                     if (str(hexdata)!='7fff' and hexdata!='7FFF'):
-                        sensor_index= find_devaddr(i+1,comm_sn,21)
+                        sensor_index= find_devaddr(i+1,comm_sn,11)
                         if sensor_index >=0:  
                             rData= int(hexdata[:-2],16)*16*16 + int(hexdata[-2:],16)
                             sensorformula=sensor_list[sensor_index].formula
@@ -1309,20 +1362,14 @@ def FKC_handlerecv(comm_index,sdata):
                             else:
                                 showinfo =mymodule.getcurrtime()+ ' FKC('+comm_sn + ') unknow formula'
                                 mymodule.create_log(showinfo)
-
-                            try:
-                                #Device_ID,Device_Code,ReportTime,ReportValue,Block_ID
-                                sSQL = sSQL+"('"+str(sensor_list[sensor_index].devid)+"','"+sensor_list[sensor_index].devcode+"','"+mymodule.getcurrtime()+"','"+str(rData)+"','"+str(sensor_list[sensor_index].blockid)+"'),"
-                            except Exception as err:
-                                showinfo =mymodule.getcurrtime()+ ' FKC('+comm_sn + ') insert sensor data failure: '+str(err)
-                                mymodule.create_log(showinfo)
-                                break
+                            sSQL = sSQL+"('"+str(sensor_list[sensor_index].devid)+"','"+sensor_list[sensor_index].devcode+"','"+mymodule.getcurrtime()+"','"+str(rData)+"','"+str(sensor_list[sensor_index].blockid)+"'),"
                         else:
                             pass
-                   #####     
+                   #####
+  
                 try:
-                    sSQL=sSQL[0:-1]+";"
-                    if sSQL[-2:] ==');':
+                    if sSQL[-2:] =='),':
+                        sSQL=sSQL[0:-1]+";"
                         comtconn=mysqlpool.connection()
                         comtcursor=comtconn.cursor()
                         comtcursor.execute(sSQL)
@@ -1331,7 +1378,6 @@ def FKC_handlerecv(comm_index,sdata):
                         comtconn.commit()  
                         comtcursor.close()
                         comtconn.close()
-                    
                 except Exception as err:
                     showinfo = mymodule.getcurrtime()+ ' FKC('+comm_sn + ') insert data failure: '+str(err)
                     mymodule.create_log(showinfo)
@@ -1358,7 +1404,7 @@ def FKC_handlerecv(comm_index,sdata):
                     sSQL=sSQL[0:-1]+" ON DUPLICATE KEY UPDATE onoff = values(onoff);"    
                     staconn=mysqlpool.connection()
                     stacursor=staconn.cursor()
-                    showinfo=mymodule.getcurrtime() + 'Get (' + comm_sn + ')'+ ' device state : '  + sSQL
+                    showinfo=mymodule.getcurrtime() + ' Get FKC(' + comm_sn + ')'+ ' device state : '  + sSQL
                     mymodule.create_log(showinfo) 
                     stacursor.execute(sSQL)
                     staconn.commit() 
@@ -1380,145 +1426,121 @@ def FKC_sendorder(dev_index,comm_index,conn_index,onedata):
     sock=conn_list[conn_index].sock
     sendtimes=0
     while True:
-        if onedata[2] == 'AC-OPEN':
-            if  onedata[3]:
-                if int(onedata[3]) > 0:
-                    sleep(int(onedata[3]))
-            if dev_index >=0 and conn_list[conn_index].isonline == 1:
-                if controller_list[dev_index].devtype=='1':
-                    sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:] + ' '
-                    sendstr = sendstr + '72' + ' '
-                    sendstr = sendstr + ('00'+hex(icontlnum).replace('0x',''))[-2:] + ' '
-                    sendstr = sendstr + '01 00' + ' '
-                    sendstr = sendstr + mymodule.crc16(sendstr,0) 
-                    sendstr=sendstr.replace(' ','')
-                    sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
-                    if sendresult==None:
-                        showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'OPEN : '+sendstr
-                        mymodule.create_log(showinfo)
-                        break
-                    else:
-                        sleep
-                        showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'OPEN : '+sendstr + ' faile times:' + str(sendtimes)
-                        sendtimes=sendtimes+1
-                elif controller_list[dev_index].devtype=='3': 
-                    sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:] + ' '
-                    sendstr = sendstr + '72' + ' '
-                    sendstr = sendstr + ('00'+hex(icontlnum+1).replace('0x',''))[-2:] + ' '
-                    sendstr = sendstr + '00 00' + ' '
-                    sendstr = sendstr + mymodule.crc16(sendstr,0) 
-                    sendstr=sendstr.replace(' ','')
-                    sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
-                    if sendresult==None: 
-                        sleep(1)
+        try:
+            if onedata[2] == 'AC-OPEN':
+                if onedata[3] != None and onedata[3] != 'NULL':
+                    if int(onedata[3]) > 0:
+                        sleep(int(onedata[3]))
+                if dev_index >=0 and conn_list[conn_index].isonline == 1:
+                    if controller_list[dev_index].devtype=='1':
                         sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:] + ' '
                         sendstr = sendstr + '72' + ' '
                         sendstr = sendstr + ('00'+hex(icontlnum).replace('0x',''))[-2:] + ' '
                         sendstr = sendstr + '01 00' + ' '
                         sendstr = sendstr + mymodule.crc16(sendstr,0) 
                         sendstr=sendstr.replace(' ','')
-                        sendresult1=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
-                        if sendresult1==None:
+                        sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
+                        if sendresult==None:
                             showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'OPEN : '+sendstr
                             mymodule.create_log(showinfo)
                             break
                         else:
-                            showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'OPEN : '+sendstr+ ' faile times:' + str(sendtimes)
+                            sleep(60)
+                            showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'OPEN : '+sendstr + ' faile times:' + str(sendtimes)
                             sendtimes=sendtimes+1
-                    else:
-                        sleep(60)
-                        showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'OPEN : '+sendstr+ ' faile times:' + str(sendtimes)
-                        sendtimes=sendtimes+1
-                       
-        elif  onedata[2] == 'AC-CLOSE':
-            if  onedata[3] :
-                if int(onedata[3]) > 0:
-                    sleep(int(onedata[3]))
-            if dev_index >=0 and conn_list[conn_index].isonline == 1:
-                if controller_list[dev_index].devtype=='1':
-                    sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:] + ' '
-                    sendstr = sendstr + '72' + ' '
-                    sendstr = sendstr + ('00'+hex(icontlnum).replace('0x',''))[-2:] + ' '
-                    sendstr = sendstr + '00 00' + ' '
-                    sendstr = sendstr + mymodule.crc16(sendstr,0) 
-                    sendstr=sendstr.replace(' ','')
-                    sendresult = sock.sendall(bytes().fromhex(sendstr))
-                    if sendresult==None:
-                        showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'CLOSE : '+sendstr
-                        mymodule.create_log(showinfo)
-                        break
-                    else:
-                        sleep(60)
-                        showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'CLOSE : '+sendstr+ ' faile times:' + str(sendtimes)
-                        sendtimes=sendtimes+1
-                        
-                elif controller_list[dev_index].devtype=='3':
-                    sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:] + ' '
-                    sendstr = sendstr + '72' + ' '
-                    sendstr = sendstr + ('00'+hex(icontlnum).replace('0x',''))[-2:] + ' '
-                    sendstr = sendstr + '00 00' + ' '
-                    sendstr = sendstr + mymodule.crc16(sendstr,0) 
-                    sendstr=sendstr.replace(' ','')
-                    sendresult = sock.sendall(bytes().fromhex(sendstr))
-                    if sendresult == None:
-                        sleep(1)
-                        sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:] + ' '
-                        sendstr = sendstr + '72' + ' '
-                        sendstr = sendstr + ('00'+hex(icontlnum+1).replace('0x',''))[-2:] + ' '
-                        sendstr = sendstr + '01 00' + ' '
-                        sendstr = sendstr + mymodule.crc16(sendstr,0) 
-                        sendstr=sendstr.replace(' ','')
-                        sendresult1 = sock.sendall(bytes().fromhex(sendstr))
-                        if sendresult1 == None:
-                            showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'CLOSE : '+sendstr
-                            mymodule.create_log(showinfo)
-                            break
-                        else:
-                            showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'CLOSE : '+sendstr+ ' faile times:' + str(sendtimes)
-                            sendtimes=sendtimes+1                            
-                    else:
-                        sleep(60)
-                        showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'CLOSE : '+sendstr+ ' faile times:' + str(sendtimes)
-                        sendtimes=sendtimes+1
-        elif  onedata[2] == 'AC-STOP':
-            if  onedata[3] :
-                if int(onedata[3]) > 0:
-                    sleep(int(onedata[32]))
-            if dev_index >=0 and conn_list[conn_index].isonline == 1:
-                if controller_list[dev_index].devtype=='1':
-                    sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:] + ' '
-                    sendstr = sendstr + '72' + ' '
-                    sendstr = sendstr + ('00'+hex(icontlnum).replace('0x',''))[-2:] + ' '
-                    sendstr = sendstr + '00 00' + ' '
-                    sendstr = sendstr + mymodule.crc16(sendstr,0) 
-                    sendstr=sendstr.replace(' ','')
-                    sendresult = sock.sendall(bytes().fromhex(sendstr))
-                    if sendresult == None:
-                        showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'STOP : '+sendstr
-                        mymodule.create_log(showinfo)
-                        break
-                    else:
-                        sleep(60)
-                        showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'STOP : '+sendstr+ ' faile times:' + str(sendtimes)
-                        sendtimes=sendtimes+1
-                elif controller_list[dev_index].devtype=='3':
-                    sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:] + ' '
-                    sendstr = sendstr + '72' + ' '
-                    sendstr = sendstr + ('00'+hex(icontlnum).replace('0x',''))[-2:] + ' '
-                    sendstr = sendstr + '00 00' + ' '
-                    sendstr = sendstr + mymodule.crc16(sendstr,0) 
-                    sendstr=sendstr.replace(' ','')
-                    sendresult = sock.sendall(bytes().fromhex(sendstr))
-                    if sendresult == None:
-                        sleep(1)
+                    elif controller_list[dev_index].devtype=='3': 
                         sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:] + ' '
                         sendstr = sendstr + '72' + ' '
                         sendstr = sendstr + ('00'+hex(icontlnum+1).replace('0x',''))[-2:] + ' '
                         sendstr = sendstr + '00 00' + ' '
                         sendstr = sendstr + mymodule.crc16(sendstr,0) 
                         sendstr=sendstr.replace(' ','')
-                        sendresult1 = sock.sendall(bytes().fromhex(sendstr))
-                        if sendresult1 == None:
+                        sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
+                        if sendresult==None: 
+                            sleep(1)
+                            sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:] + ' '
+                            sendstr = sendstr + '72' + ' '
+                            sendstr = sendstr + ('00'+hex(icontlnum).replace('0x',''))[-2:] + ' '
+                            sendstr = sendstr + '01 00' + ' '
+                            sendstr = sendstr + mymodule.crc16(sendstr,0) 
+                            sendstr=sendstr.replace(' ','')
+                            sendresult1=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
+                            if sendresult1==None:
+                                showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'OPEN : '+sendstr
+                                mymodule.create_log(showinfo)
+                                break
+                            else:
+                                showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'OPEN : '+sendstr+ ' faile times:' + str(sendtimes)
+                                sendtimes=sendtimes+1
+                        else:
+                            sleep(60)
+                            showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'OPEN : '+sendstr+ ' faile times:' + str(sendtimes)
+                            sendtimes=sendtimes+1
+                           
+            elif  onedata[2] == 'AC-CLOSE':
+                if onedata[3] != None and onedata[3] != 'NULL':
+                    if int(onedata[3]) > 0:
+                        sleep(int(onedata[3]))
+                if dev_index >=0 and conn_list[conn_index].isonline == 1:
+                    if controller_list[dev_index].devtype=='1':
+                        sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:] + ' '
+                        sendstr = sendstr + '72' + ' '
+                        sendstr = sendstr + ('00'+hex(icontlnum).replace('0x',''))[-2:] + ' '
+                        sendstr = sendstr + '00 00' + ' '
+                        sendstr = sendstr + mymodule.crc16(sendstr,0) 
+                        sendstr=sendstr.replace(' ','')
+                        sendresult = sock.sendall(bytes().fromhex(sendstr))
+                        if sendresult==None:
+                            showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'CLOSE : '+sendstr
+                            mymodule.create_log(showinfo)
+                            break
+                        else:
+                            sleep(60)
+                            showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'CLOSE : '+sendstr+ ' faile times:' + str(sendtimes)
+                            sendtimes=sendtimes+1
+                            
+                    elif controller_list[dev_index].devtype=='3':
+                        sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:] + ' '
+                        sendstr = sendstr + '72' + ' '
+                        sendstr = sendstr + ('00'+hex(icontlnum).replace('0x',''))[-2:] + ' '
+                        sendstr = sendstr + '00 00' + ' '
+                        sendstr = sendstr + mymodule.crc16(sendstr,0) 
+                        sendstr=sendstr.replace(' ','')
+                        sendresult = sock.sendall(bytes().fromhex(sendstr))
+                        if sendresult == None:
+                            sleep(1)
+                            sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:] + ' '
+                            sendstr = sendstr + '72' + ' '
+                            sendstr = sendstr + ('00'+hex(icontlnum+1).replace('0x',''))[-2:] + ' '
+                            sendstr = sendstr + '01 00' + ' '
+                            sendstr = sendstr + mymodule.crc16(sendstr,0) 
+                            sendstr=sendstr.replace(' ','')
+                            sendresult1 = sock.sendall(bytes().fromhex(sendstr))
+                            if sendresult1 == None:
+                                showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'CLOSE : '+sendstr
+                                mymodule.create_log(showinfo)
+                                break
+                            else:
+                                showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'CLOSE : '+sendstr+ ' faile times:' + str(sendtimes)
+                                sendtimes=sendtimes+1                            
+                        else:
+                            sleep(60)
+                            showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'CLOSE : '+sendstr+ ' faile times:' + str(sendtimes)
+                            sendtimes=sendtimes+1
+            elif  onedata[2] == 'AC-STOP':
+                if onedata[3] != None and onedata[3] != 'NULL':
+                    if int(onedata[3]) > 0:
+                        sleep(int(onedata[32]))
+                if dev_index >=0 and conn_list[conn_index].isonline == 1:
+                    if controller_list[dev_index].devtype=='1':
+                        sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:] + ' '
+                        sendstr = sendstr + '72' + ' '
+                        sendstr = sendstr + ('00'+hex(icontlnum).replace('0x',''))[-2:] + ' '
+                        sendstr = sendstr + '00 00' + ' '
+                        sendstr = sendstr + mymodule.crc16(sendstr,0) 
+                        sendstr=sendstr.replace(' ','')
+                        sendresult = sock.sendall(bytes().fromhex(sendstr))
+                        if sendresult == None:
                             showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'STOP : '+sendstr
                             mymodule.create_log(showinfo)
                             break
@@ -1526,39 +1548,386 @@ def FKC_sendorder(dev_index,comm_index,conn_index,onedata):
                             sleep(60)
                             showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'STOP : '+sendstr+ ' faile times:' + str(sendtimes)
                             sendtimes=sendtimes+1
+                    elif controller_list[dev_index].devtype=='3':
+                        sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:] + ' '
+                        sendstr = sendstr + '72' + ' '
+                        sendstr = sendstr + ('00'+hex(icontlnum).replace('0x',''))[-2:] + ' '
+                        sendstr = sendstr + '00 00' + ' '
+                        sendstr = sendstr + mymodule.crc16(sendstr,0) 
+                        sendstr=sendstr.replace(' ','')
+                        sendresult = sock.sendall(bytes().fromhex(sendstr))
+                        if sendresult == None:
+                            sleep(1)
+                            sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:] + ' '
+                            sendstr = sendstr + '72' + ' '
+                            sendstr = sendstr + ('00'+hex(icontlnum+1).replace('0x',''))[-2:] + ' '
+                            sendstr = sendstr + '00 00' + ' '
+                            sendstr = sendstr + mymodule.crc16(sendstr,0) 
+                            sendstr=sendstr.replace(' ','')
+                            sendresult1 = sock.sendall(bytes().fromhex(sendstr))
+                            if sendresult1 == None:
+                                showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'STOP : '+sendstr
+                                mymodule.create_log(showinfo)
+                                break
+                            else:
+                                sleep(60)
+                                showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'STOP : '+sendstr+ ' faile times:' + str(sendtimes)
+                                sendtimes=sendtimes+1
+                        else:
+                            sleep(60)
+                            showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'STOP : '+sendstr+ ' faile times:' + str(sendtimes)
+                            sendtimes=sendtimes+1
+            elif  onedata[2] == 'INTERVAL':
+                if onedata[3] != None and onedata[3] != 'NULL': 
+                    if int(onedata[3]) > 0:
+                        sleep(int(onedata[3]))
+                if conn_list[conn_index].isonline == 1:        
+                    showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'SET STATUS : '+str(onedata[4])
+                    mymodule.create_log(showinfo)
+            elif  onedata[2] == 'GETSTATE':
+                if onedata[3] != None and onedata[3] != 'NULL':
+                    if int(onedata[3]) > 0:
+                        sleep(int(onedata[3]))
+                if conn_list[conn_index].isonline == 1:        
+                    sendstr = '00 70 00 54'
+                    sendstr=sendstr.replace(' ','')
+                    sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
+                    if sendresult == None:
+                        showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn + ')'+' '+ deviceno+' GET STATUS : '+sendstr
+                        mymodule.create_log(showinfo)
+                        break
                     else:
                         sleep(60)
-                        showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'STOP : '+sendstr+ ' faile times:' + str(sendtimes)
+                        showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn + ')'+' '+ deviceno+' GET STATUS : '+sendstr+ ' faile times:' + str(sendtimes)
                         sendtimes=sendtimes+1
-        elif  onedata[2] == 'INTERVAL':
-            if onedata[3] : 
-                if int(onedata[3]) > 0:
-                    sleep(int(onedata[3]))
-            if conn_list[conn_index].isonline == 1:        
-                showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'SET STATUS : '+str(onedata[4])
-                mymodule.create_log(showinfo)
-        elif  onedata[2] == 'GETSTATE':
-            if onedata[3] : 
-                if int(onedata[3]) > 0:
-                    sleep(int(onedata[3]))
-            if conn_list[conn_index].isonline == 1:        
-                sendstr = '00 70 00 54'
-                sendstr=sendstr.replace(' ','')
-                sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
-                if sendresult == None:
-                    showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn + ')'+' '+ deviceno+' GET STATUS : '+sendstr
-                    mymodule.create_log(showinfo)
-                    break
-                else:
-                    sleep(60)
-                    showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn + ')'+' '+ deviceno+' GET STATUS : '+sendstr+ ' faile times:' + str(sendtimes)
-                    sendtimes=sendtimes+1
+        except Exception as err:
+            showinfo =mymodule.getcurrtime()+' '+ 'FKC('+comm_sn + ') send order failture : '+str(err)
+            mymodule.create_log(showinfo)
+            sendtimes=sendtimes+1
         if sendtimes > 3:
             mymodule.create_log(showinfo)
             showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn + ')'+' '+ deviceno+' shutdown for send over 3 times '
             mymodule.create_log(showinfo)
-            break            
- 
+            break
+    reslSQL='update yw_c_control_log_tbl set ExecuteTime=%s,ExecuteResult=%s where id = "' + str(onedata[0]) + '"'
+    reslconn=mysqlpool.connection()
+    reslcursor=reslconn.cursor()
+    reslcursor.execute(reslSQL,args=(datetime.now().strftime('%Y-%m-%d %H:%M:%S'),'4'))
+    reslconn.commit() 
+    reslcursor.close()
+    reslconn.close() 
+    
+    
+def DYC_handlerecv(comm_index,sdata):
+    comm_sn=comm_list[comm_index].serial_num
+    temp1=sdata[:-4]
+    temp2=sdata[-4:]
+    a=mymodule.crc16(temp1,0).replace(' ','')
+    passnum=comm_list[comm_index].passnum
+    if True:
+        sOrder=sdata[2:4]
+        #获取记录
+        try:
+            if sOrder == '03' and len(sdata)==14: #主动采集浓度数据
+                rData=int(sdata[6:10],16)/10000
+                sensor_index= find_devaddr(1,comm_sn,11)
+                sSQL="INSERT INTO yw_c_sensordata_tbl (Device_ID,Device_Code,ReportTime,ReportValue,Block_ID) values"
+                if sensor_index >= 0:
+                    sSQL = sSQL+"('"+str(sensor_list[sensor_index].devid)+"','"+sensor_list[sensor_index].devcode+"','"+mymodule.getcurrtime()+"','"+str(rData)+"','"+str(sensor_list[sensor_index].blockid)+"'),"
+                try:
+                    if sSQL[-2:] =='),':
+                        sSQL=sSQL[0:-1]+";"
+                        comtconn=mysqlpool.connection()
+                        comtcursor=comtconn.cursor()
+                        comtcursor.execute(sSQL)
+                        showinfo=mymodule.getcurrtime() + ' insert (' + comm_sn + ')'+ ' sensor data : '  + sSQL
+                        mymodule.create_log(showinfo)                    
+                        comtconn.commit()  
+                        comtcursor.close()
+                        comtconn.close()
+                except Exception as err:
+                    showinfo = mymodule.getcurrtime()+ ' DYC('+comm_sn + ') insert data failure: '+str(err)
+                    mymodule.create_log(showinfo) 
+            elif sOrder == '06' and len(sdata)==16: #被动获取浓度数据:
+                rData=int(sdata[8:12],16)/10000
+                sensor_index= find_devaddr(1,comm_sn,11)
+                sSQL="INSERT INTO yw_c_sensordata_tbl (Device_ID,Device_Code,ReportTime,ReportValue,Block_ID) values"
+                if sensor_index >= 0:
+                    sSQL = sSQL+"('"+str(sensor_list[sensor_index].devid)+"','"+sensor_list[sensor_index].devcode+"','"+mymodule.getcurrtime()+"','"+str(rData)+"','"+str(sensor_list[sensor_index].blockid)+"'),"
+                try:
+                    if sSQL[-2:] =='),':
+                        sSQL=sSQL[0:-1]+";"
+                        comtconn=mysqlpool.connection()
+                        comtcursor=comtconn.cursor()
+                        comtcursor.execute(sSQL)
+                        showinfo=mymodule.getcurrtime() + ' insert  DYC(' + comm_sn + ')'+ ' sensor data : '  + sSQL
+                        mymodule.create_log(showinfo)                    
+                        comtconn.commit()  
+                        comtcursor.close()
+                        comtconn.close()
+                except Exception as err:
+                    showinfo = mymodule.getcurrtime()+ ' DYC('+comm_sn + ') insert data failure: '+str(err)
+                    mymodule.create_log(showinfo)                 
+            elif sOrder == '10' and len(sdata) > 128: #任务记录
+                try:
+                    tasklog=[]
+                    for i in range(0,32):
+                        hexdata=sdata[i*4+14:i*4+18]
+                        tasklog.append(int(hexdata,16))
+                    isRemote=int(tasklog[0])
+                    taskstate=int(tasklog[3])
+                    density_set=tasklog[4]/10000
+                    inteval_set=int(tasklog[5]/60) #分钟
+                    task_mode=int(tasklog[6])
+                    commid=comm_list[comm_index].commid
+                    scheduledtime=('00'+str(tasklog[10]))[-2:]+':'+('00'+str(tasklog[11]))[-2:]+':'+('00'+str(tasklog[12]))[-2:]
+                    taskdate=str(tasklog[7])+'-'+('00'+str(tasklog[8]))[-2:]+'-'+('00'+str(tasklog[9]))[-2:]
+                    starttime=taskdate+' '+('00'+str(tasklog[14]))[-2:]+':'+('00'+str(tasklog[15]))[-2:]+':'+('00'+str(tasklog[16]))[-2:]
+                    endtime=taskdate+' '+('00'+str(tasklog[19]))[-2:]+':'+('00'+str(tasklog[20]))[-2:]+':'+('00'+str(tasklog[21]))[-2:]
+                    interval_real=int(tasklog[17]/60)
+                    if taskstate > 0 and  taskstate < 3:  
+                        reslconn=mysqlpool.connection()
+                        reslcursor=reslconn.cursor()
+                        sResult = "INSERT INTO yw_g_tasklog_tbl (TaskDate,IsRemote,TaskMode,SetDensity,SetInterval,Commucation_ID, "
+                        sResult = sResult +"ExecuteTime,ExecuteResult,ActualInterval,CreateTime) "
+                        sResult = sResult + "values('"+taskdate+"','"+str(isRemote)+"','"+str(task_mode)+"','"+str(density_set)+"','"+str(inteval_set)+"','"+str(commid)+"',"
+                        sResult = sResult + "'"+endtime+"','1','"+str(interval_real)+"',now())"
+                        reslcursor.execute(sResult) 
+                        reslconn.commit()
+                        
+                        showinfo=mymodule.getcurrtime()+' '+'DYC('+comm_sn + ')'+' '+ 'add a new task log'
+                        mymodule.create_log(showinfo)
+                        sleep(0.5)
+                        
+                        reslcursor.close()
+                        reslconn.close()
+                        
+                except Exception as err:
+                    showinfo =mymodule.getcurrtime()+ ' DYC('+comm_sn + ') get control status failture:'+str(err)
+                    mymodule.create_log(showinfo)
+                    
+                    
+            #020507d100009cb4020f0c5000040100be43
+            elif sOrder == '0f' or (sOrder == '05' and sdata[16:20]== '020f' ):
+                if sOrder == '0f':           
+                #0000201910180001 020503e8ff000c79 020f 0c50(addr) 0010(out num) 02(byte num) 3f02(数据) a6b1指令回传
+                    lendata=int(sdata[8:12],16)
+                    dataset=sdata[14:-4]
+                elif sOrder == '05' and sdata[16:20]=='020f':
+                    lendata=int(sdata[24:28],16)
+                    dataset=sdata[30:-4]
+                if lendata > 0:
+                    sSQL="insert into yw_d_controller_tbl(id,Code,PortNum,Commucation_ID,onoff) values "
+                    try:
+                        tempa=''
+                        tempb=''
+                        statusvar=''
+                        sstate=''
+                        for i in range(0,int(len(dataset)/2)):
+                            tempa=dataset[i*2:i*2+2] #注意modbus标准版和矩形modbus区别，modbus按顺序
+                            tempb=tempb+('00000000'+bin(int(tempa,16)).replace('0b',''))[-8:][::-1]
+                            statusvar=tempb
+                        for i in range(0,lendata):
+                            control_index= find_devaddr(i+1,comm_sn,10)
+                            if control_index >=0:
+                                if controller_list[control_index].devtype=='1':  
+                                    contrlstate = statusvar[i]
+                                    if  int(contrlstate,16)==1:
+                                        sstate='1'
+                                    elif int(contrlstate,16)==0:
+                                        sstate='2'
+                                    else:
+                                        print('state unnomal')
+                                elif controller_list[control_index].devtype=='3':
+                                    contrlstate = statusvar[i]
+                                    closestate = statusvar[i+1]
+                                    if  int(contrlstate,16)==1 and int(closestate,16)==0:
+                                        sstate='1' #开
+                                    elif int(contrlstate,16)==0 and int(closestate,16)==1:
+                                        sstate='2' #关
+                                    elif int(contrlstate,16)==0 and int(closestate,16)==0:
+                                        sstate='3' #停   
+                                    else:
+                                        print('state unnomal')
+                                sSQL = sSQL+"('"+str(controller_list[control_index].devid)+"','"+str(controller_list[control_index].devcode)+"',"
+                                sSQL = sSQL+"'"+str(controller_list[control_index].devaddr)+"',"
+                                sSQL = sSQL+"'"+str(controller_list[control_index].commnum)+"','"+sstate+"'),"
+                    except Exception as err:
+                        showinfo =mymodule.getcurrtime()+ ' DYC('+comm_sn + ') get control status failture:'+str(err)
+                        mymodule.create_log(showinfo)
+    
+                    try:
+                        if sSQL[-2:] =='),':
+                            sSQL=sSQL[0:-1]+" ON DUPLICATE KEY UPDATE onoff = values(onoff);"    
+                            staconn=mysqlpool.connection()
+                            stacursor=staconn.cursor()
+                            showinfo=mymodule.getcurrtime() + ' Get DYC(' + comm_sn + ')'+ ' device state : '  + sSQL
+                            mymodule.create_log(showinfo) 
+                            stacursor.execute(sSQL)
+                            staconn.commit() 
+                            stacursor.close()
+                            staconn.close()    
+                    except Exception as err:
+                        showinfo =mymodule.getcurrtime()+ ' DYC('+comm_sn + ') update control status failture:'+str(err)
+                        mymodule.create_log(showinfo)
+                         
+        except Exception as err:
+            showinfo =mymodule.getcurrtime()+  ' DYC('+comm_sn + ') handle received data failture:'+str(err)
+            mymodule.create_log(showinfo)
+def DYC_sendorder(dev_index,comm_index,conn_index,onedata):
+#任务ID，发送日期，设置时长，设置浓度，预计时间，通讯设备序列号，通讯地址      
+    sendtimes=0
+    sendresult=''
+    
+    while True:
+        if  dev_index != -10 and comm_index != -10 and onedata != None:
+            try:    
+                comm_sn=comm_list[comm_index].serial_num
+                deviceno=onedata[7]
+                icommnum = int(comm_list[comm_index].commaddr)
+                icontlnum = int(controller_list[dev_index].devaddr)
+                sock=conn_list[conn_index].sock
+                if onedata[2] == 'AC-OPEN':
+                    if onedata[3] != None and onedata[3] != 'NULL':
+                        if int(onedata[3]) > 0:
+                            sleep(int(onedata[3])) #延迟
+                    if dev_index >=0 and conn_list[conn_index].isonline == 1:
+                        if controller_list[dev_index].devtype=='1':
+                            sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:]
+                            sendstr = sendstr + ' ' + '05'
+                            scontlnum = ('0000'+hex(icontlnum-1+2000).replace('0x',''))[-4:]
+                            sendstr = sendstr +' '+  scontlnum[:2] + ' '+scontlnum[-2:]     #起始地址
+                            sendstr = sendstr +' '+ 'FF 00' #输出数量+字节数+输出值
+                            sendstr = sendstr +' '+ mymodule.crc16(sendstr,0)
+                            sendstr=sendstr.replace(' ','')
+                            sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
+                        if sendresult== None:
+                            showinfo=mymodule.getcurrtime()+' '+'DYC('+comm_sn+ ')'+ ' '+deviceno+' '+'OPEN: '+sendstr
+                            mymodule.create_log(showinfo)
+                            reslSQL='update yw_c_control_log_tbl set ExecuteTime=%s,ExecuteResult=%s where id = "' + str(onedata[0]) + '"'
+                            reslconn=mysqlpool.connection()
+                            reslcursor=reslconn.cursor()
+                            reslcursor.execute(reslSQL,args=(datetime.now().strftime('%Y-%m-%d %H:%M:%S'),'4'))
+                            reslconn.commit() 
+                            reslcursor.close()
+                            reslconn.close()
+                            break
+                        else:
+                            sleep(60)
+                            showinfo=mymodule.getcurrtime()+' '+'DYC('+comm_sn+ ')'+ ' '+deviceno+' '+'OPEN: '+sendstr+ ' failed times:' + str(sendtimes)
+                            sendtimes=sendtimes+1
+                elif  onedata[2] == 'AC-CLOSE':
+                    if onedata[3] != None and onedata[3] != 'NULL':
+                        if int(onedata[3]) > 0:
+                            sleep(int(onedata[3])) 
+                    if dev_index >=0 and conn_list[conn_index].isonline == 1:
+                        if controller_list[dev_index].devtype=='1':
+                            sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:]
+                            sendstr = sendstr + ' ' + '05'
+                            scontlnum = ('0000'+hex(icontlnum-1+5000).replace('0x',''))[-4:]
+                            sendstr = sendstr +' '+  scontlnum[:2] + ' '+scontlnum[-2:]     #起始地址
+                            sendstr = sendstr +' '+ 'FF 00' #输出数量+字节数+输出值
+                            sendstr = sendstr +' '+ mymodule.crc16(sendstr,0)
+                            sendstr=sendstr.replace(' ','')
+                            sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
+                    if sendresult== None:
+                        showinfo=mymodule.getcurrtime()+' '+'DYC('+comm_sn+ ')'+ ' '+deviceno+' '+'CLOSE: '+sendstr
+                        mymodule.create_log(showinfo)
+                        reslSQL='update yw_c_control_log_tbl set ExecuteTime=%s,ExecuteResult=%s where id = "' + str(onedata[0]) + '"'
+                        reslconn=mysqlpool.connection()
+                        reslcursor=reslconn.cursor()
+                        reslcursor.execute(reslSQL,args=(datetime.now().strftime('%Y-%m-%d %H:%M:%S'),'4'))
+                        reslconn.commit() 
+                        reslcursor.close()
+                        reslconn.close()
+                        break
+                    else:
+                        sleep(60)
+                        showinfo=mymodule.getcurrtime()+' '+'DYC('+comm_sn+ ')'+ ' '+deviceno+' '+'CLOSE: '+sendstr+ ' failed times:' + str(sendtimes)
+                        sendtimes=sendtimes+1
+            except Exception as err:
+                showinfo =mymodule.getcurrtime()+  ' DYC('+comm_sn + ') send order failture : '+str(err)
+                mymodule.create_log(showinfo)
+                sendtimes=sendtimes+1
+            if sendtimes > 3:
+                mymodule.create_log(showinfo)
+                showinfo=mymodule.getcurrtime()+' '+'DYC('+comm_sn + ')'+' task shutdown for send over 3 times '
+                mymodule.create_log(showinfo)
+                reslSQL='update yw_g_taskorder_tbl set ExecuteTime=%s,ExecuteResult=%s where id = "' + str(onedata[0]) + '"'
+                reslconn=mysqlpool.connection()
+                reslcursor=reslconn.cursor()
+                reslcursor.execute(reslSQL,args=(datetime.now().strftime('%Y-%m-%d %H:%M:%S'),'4'))
+                reslconn.commit() 
+                reslcursor.close()
+                reslconn.close()
+                break        
+            
+            
+        if  dev_index == -10 and comm_index == -10 and onedata != None: 
+            #任务ID，发送日期，设置时长，设置浓度，预计时间，通讯设备序列号，通讯地址
+            try:
+                taskinterval=onedata[2]
+                taskdestity=onedata[3]
+                scheduledtime=onedata[4]
+                comm_sn=onedata[5]
+                PLCAddress=onedata[6]
+                conn_index=find_conn_sn(comm_sn)
+                if conn_index >= 0:
+                    sock=conn_list[conn_index].sock
+                    senddestity=('0000'+hex(int(taskdestity*10000)).replace('0x',''))[-4:]
+                    sendinterval=('0000'+hex(taskinterval*60).replace('0x',''))[-4:]
+                    sendyear=('0000'+hex(scheduledtime.year).replace('0x',''))[-4:]
+                    sendmonth=('0000'+hex(scheduledtime.month).replace('0x',''))[-4:]
+                    sendday=('0000'+hex(scheduledtime.day).replace('0x',''))[-4:]
+                    sendhour=('0000'+hex(scheduledtime.hour).replace('0x',''))[-4:]
+                    sendminute=('0000'+hex(scheduledtime.minute).replace('0x',''))[-4:]
+                    sendsecond=('0000'+hex(scheduledtime.second).replace('0x',''))[-4:]
+        
+                    sendstr=('00'+hex(int(PLCAddress,10)).replace('0x',''))[-2:] #设备地址
+                    sendstr=sendstr+' '+'10' #指令
+                    sendstr=sendstr+' '+'01 2B' #起始地址,40300(减1)
+                    sendstr=sendstr+' '+'00 07' #寄存器数量n
+                    sendstr=sendstr+' '+'0E' #字节数2*n
+                    sendstr = sendstr + ' ' + '00 01' #传输的数据1：远程控制
+                    sendstr = sendstr + ' ' + '00 00 00 00' #传输的数据2：指令ID
+                    sendstr = sendstr + ' ' + '00 00' #传输的数据4：任务状态，0-未开始
+                    sendstr = sendstr + ' ' + senddestity[0:2] + ' ' + senddestity[2:4]#传输的数据5：设定浓度
+                    sendstr = sendstr + ' ' + sendinterval[0:2] + ' ' + sendinterval[2:4] #传输的数据6：设定时长
+                    sendstr = sendstr + ' ' + '00 00' #传输的数据7：任务模式：0-即时任务
+                    sendstr = sendstr +' '+ mymodule.crc16(sendstr,0)
+                    sendstr=sendstr.replace(' ','')
+                    sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
+                    if sendresult== None:
+                        showinfo=mymodule.getcurrtime()+' '+'DYC('+comm_sn+ ')'+ ' Task send: '+sendstr
+                        mymodule.create_log(showinfo) 
+                        reslSQL='update yw_g_taskorder_tbl set ExecuteTime=%s,ExecuteResult=%s where id = "' + str(onedata[0]) + '"'
+                        reslconn=mysqlpool.connection()
+                        reslcursor=reslconn.cursor()
+                        reslcursor.execute(reslSQL,args=(datetime.now().strftime('%Y-%m-%d %H:%M:%S'),'4'))
+                        reslconn.commit() 
+                        reslcursor.close()
+                        reslconn.close()
+                        break
+                    else:
+                        sleep(60)
+                        showinfo=mymodule.getcurrtime()+' '+'DYC('+comm_sn+ ')'+ ' '+deviceno+' '+'Task send: '+sendstr+ ' failed times:' + str(sendtimes)
+                        sendtimes=sendtimes+1
+            except Exception as err:
+                showinfo =mymodule.getcurrtime()+  ' DYC('+comm_sn + ') Task send order failture : '+str(err)
+                mymodule.create_log(showinfo)
+                sendtimes=sendtimes+1
+            if sendtimes > 3:
+                mymodule.create_log(showinfo)
+                showinfo=mymodule.getcurrtime()+' '+'DYC('+comm_sn + ')'+' '+ deviceno+' shutdown for send over 3 times '
+                mymodule.create_log(showinfo)        
+                reslSQL='update yw_g_taskorder_tbl set ExecuteTime=%s,ExecuteResult=%s where id = "' + str(onedata[0]) + '"'
+                reslconn=mysqlpool.connection()
+                reslcursor=reslconn.cursor()
+                reslcursor.execute(reslSQL,args=(datetime.now().strftime('%Y-%m-%d %H:%M:%S'),'4'))
+                reslconn.commit() 
+                reslcursor.close()
+                reslconn.close()
+                break
 
 def collect_data(comm_index):
     #下发采集任务
@@ -1619,7 +1988,18 @@ def collect_data(comm_index):
                 #sendstr='02 03 00 00 00 10 44 35'                    
                 sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
             elif commtype=='PLC':
-                sendresult=None
+                pass
+            elif commtype =='DYC':
+                '''
+                sendstr= ('00'+hex(int(comm_list[comm_index].commaddr)).replace('0x',''))[-2:]
+                sendstr=sendstr+' '+ '03'
+                sendstr=sendstr+' '+ '00 CD' #起始地址40206-1
+                sendstr=sendstr+' '+ '00 01' #数量
+                sendstr=sendstr+' '+ mymodule.crc16(sendstr,0)
+                showinfo=mymodule.getcurrtime() + ' collect (' + comm_sn + ')'+ 'sensor data:'  + sendstr
+                sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
+                '''
+                pass
             if sendresult == None:
                 conn_list[conn_index].lasttime=datetime.now()
                 overtimegap=datetime.now()-conn_list[conn_index].lasttime
@@ -1637,7 +2017,6 @@ def collect_data(comm_index):
 def get_state(comm_index):
     sendstr=''
     showinfo=''
-
     comm_sn=comm_list[comm_index].serial_num
     conn_index=find_conn_sn(comm_sn)
     sock=conn_list[conn_index].sock
@@ -1653,13 +2032,10 @@ def get_state(comm_index):
             sendstr=''
             if commtype=='SFJ-0804' or commtype=='SFJ-1200':
                 pass
-            elif commtype=='FKC':
+            elif commtype=='FKC': 
                 #pass
                 sendstr='00 70 00 54'
                 sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
-                
-            elif commtype=='XPC':
-                pass
             elif commtype=='KLC':
                 sendstr= '15 01 00 00 00 06 02'
                 sendstr=sendstr+' '+ '03'
@@ -1667,12 +2043,8 @@ def get_state(comm_index):
                 sendstr=sendstr+' '+ '00 04' #数量
                 sendstr=sendstr+' '+ mymodule.crc16(sendstr,0)
                 sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
-            elif commtype=='PLC':
-                #pass
-                sendstr= ('00'+hex(int(comm_list[comm_index].commaddr)).replace('0x',''))[-2:]
-                sendstr=sendstr+' '+ '01'
-                sendstr=sendstr+' '+ '00 00 00 32'
-                sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
+            elif commtype=='XPC' or commtype == 'DYC' or commtype == 'PLC':
+                pass
             
             if sendresult == None:
                 conn_list[conn_index].lasttime=datetime.now()
@@ -1708,7 +2080,12 @@ def connect_sockserver():
             IOT_sendorder_thread=myThread(target=IOT_send_thread,args=())
             IOT_sendorder_thread.start() 
             SFJ_sendorder_thread=myThread(target=SFJ_send_thread,args=())
-            SFJ_sendorder_thread.start()        
+            SFJ_sendorder_thread.start()   
+        elif commtype_valid == 3: 
+            IOT_sendorder_thread=myThread(target=IOT_send_thread,args=())
+            IOT_sendorder_thread.start() 
+            SFJ_sendorder_thread=myThread(target=DYJ_send_thread,args=())
+            SFJ_sendorder_thread.start()       
             
     except Exception as e:
         showinfo=mymodule.getcurrtime()+' connect sockserver failure:'+str(e)
@@ -1721,7 +2098,7 @@ def get_devinfo():
 #设备类型：水肥机：SFJ-0804,SFJ-1200
 #通道数量：水肥机：控制通道数，通讯设备：控制通道数
 #网关类别：2-水肥机
-    if commtype_valid == 1 or commtype_valid == 2:
+    if commtype_valid == 1 or commtype_valid == 2 :
         sSQL='SELECT ID,PLC_Name,PLC_Number,PLC_Address,Company_ID,PLC_GWType,PassNumber,TotalPass FROM sfyth_plc WHERE Is_Delete = 0'
         try:
             recconn=mysqlpool.connection()
@@ -1784,7 +2161,7 @@ def get_devinfo():
 #设备参数：KLC、PLC、XPC、FKC、YYC
 #参数：通讯设备-采集间隔
 #网关类别：1-物联网
-    if commtype_valid == 0 or commtype_valid == 2:
+    if commtype_valid == 0 or commtype_valid == 2 or commtype_valid == 3:
         sSQL='SELECT a.ID,a.Code,a.SerialNumber,a.CodeAddress,a.Company_ID,c.ClassName,`Interval`,a.numofpass FROM yw_d_commnication_tbl a '
         sSQL=sSQL+'LEFT JOIN yw_d_devicemodel_tbl b ON a.Model_ID = b.ID '
         sSQL=sSQL+'LEFT JOIN yw_d_deviceclass_tbl c ON b.DeviceClass_ID= c.ID '
@@ -1960,7 +2337,9 @@ def recv_link(sock,addr):
                                 sendtimes=0
                                 conn_list[conn_index].lasttime=datetime.now()
                                 conn_list[conn_index].overtime=0
+                              
                                 FKC_handlerecv(comm_index,sdata1)
+                           
                             elif commtype == 'XPC':#新普惠
                                 sendtimes=0
                                 conn_list[conn_index].lasttime=datetime.now()
@@ -1985,7 +2364,13 @@ def recv_link(sock,addr):
                                 conn_list[conn_index].lasttime=datetime.now()
                                 conn_list[conn_index].overtime=0
                                 sdata1=sdata[12:].replace(' ','')
-                                KLC_handlerecv(comm_index,sdata1)        
+                                KLC_handlerecv(comm_index,sdata1)
+                            elif commtype == 'DYC': #昆仑海岸
+                                sendtimes=0
+                                conn_list[conn_index].lasttime=datetime.now()
+                                conn_list[conn_index].overtime=0
+                                DYC_handlerecv(comm_index,sdata1)    
+                                        
                             else: #未知公式
                                 sendtimes=sendtimes+1
                                 showinfo = mymodule.getcurrtime() + ' get comm_device (' + comm_sn + ')'+ ' unknow type'
@@ -1996,19 +2381,17 @@ def recv_link(sock,addr):
                             showinfo = mymodule.getcurrtime() + ' comm_device (' + comm_sn + ')'+ ' data length error:'+sdata
                             mymodule.create_log(showinfo)
                         if sendtimes > 5:
-                            
+                            conn_list[conn_index].isonline = 0
                             break
                 else :#未连接请求
                     bResult=False
                     comm_index = find_comm_sn(comm_sn)
                     if comm_index >=0:
                     #创建新连接
-                        if len(sdata)==16:
-                            bResult=create_sock(sock,addr,comm_sn)
-                        elif len(sdata)==44:  #昆仑海岸响应连接
+                        if sdata[0:12]=='150122220010': #KLC首次链接
                             sendstr='15012222000180'
-                            sock.sendall(bytes().fromhex(sendstr))
-                            bResult=create_sock(sock,addr,comm_sn) 
+                            sock.sendall(bytes().fromhex(sendstr)) 
+                        bResult=create_sock(sock,addr,comm_sn) 
                     else:
                         illegaltimes= illegaltimes + 1
                         showinfo =mymodule.getcurrtime() + ' receive client (' + comm_sn + ')' +' error connect data: ' + sdata +' ' + str(illegaltimes) +' times.'                 
@@ -2016,45 +2399,46 @@ def recv_link(sock,addr):
                     
                     if bResult:
                         if comm_list[comm_index].commclass == 1:
-                            for i in range(1,8):
+                            for i in range(1,16):
                                 controller_index = find_devaddr(i,comm_sn,10)
                                 if controller_index >= 0:
                                     existcontroller = 1
                                     break
-                            for i in range(1,8):
+                            for i in range(1,16):
                                 sensor_index = find_devaddr(i,comm_sn,11)
                                 if sensor_index >= 0:
                                     existsensor = 1
                                     break
                         elif comm_list[comm_index].commclass == 2:
-                            for i in range(1,8):
+                            for i in range(1,16):
                                 controller_index = find_devaddr(i,comm_sn,20)
                                 if controller_index >= 0:
                                     existcontroller = 1
                                     break
-                            for i in range(1,8):
+                            for i in range(1,16):
                                 sensor_index = find_devaddr(i,comm_sn,21)
                                 if sensor_index >= 0:
                                     existsensor = 1
                                     break        
                         handle_data_scheduler = BackgroundScheduler()
                         commtype = comm_list[comm_index].commtype
-                        if commtype=="KLC" or commtype=="FKC" or commtype=="XPC" or commtype=="YYC":
+                        if commtype=="KLC" or commtype=="FKC" or commtype=="XPC" or commtype=="YYC" :
                             if existsensor:
-                                trigger = IntervalTrigger(seconds=default_collecttime)
-                                handle_data_scheduler.add_job(collect_data,trigger,id='sensor'+comm_sn,args=(comm_index,))
-                        if commtype=="KLC" or commtype=="FKC" or commtype=="PLC":
+                                trigger_data = IntervalTrigger(seconds=default_collecttime)
+                                handle_data_scheduler.add_job(collect_data,trigger_data,coalesce=True,max_instances=2,id='sensor'+comm_sn,args=(comm_index,))
+                        if commtype=="KLC" or commtype=="FKC" :
                             if existcontroller:
-                                trigger = IntervalTrigger(seconds=default_statetime)    
-                                handle_data_scheduler.add_job(get_state,trigger,id='cont'+comm_sn,args=(comm_index,))
+                                trigger_state = IntervalTrigger(seconds=default_statetime)    
+                                handle_data_scheduler.add_job(get_state,trigger_state,coalesce=True,max_instances=5,id='cont'+comm_sn,args=(comm_index,))
                         handle_data_scheduler.start()
+                    
                     
     #异常数据,是否需要退出
         except Exception as e:
             illegaltimes= illegaltimes + 1
             showinfo=mymodule.getcurrtime()+'  receive from['+comm_sn+']('+addr[0] + ':' + str(addr[1]) +  ' illegal data :'+str(e) + ' '  + str(illegaltimes) +' times.'
             mymodule.create_log(showinfo)
-        if  illegaltimes > 5 :
+        if  illegaltimes > 30 :
             break
     
     if existsensor:
@@ -2064,15 +2448,14 @@ def recv_link(sock,addr):
     conn_index=find_conn_sn(comm_sn)
     if conn_index >=0:
         conn_list[conn_index].isonline = 0
-    sleep(5)
+    sleep(2)
     close_sock(sock,addr,comm_sn)
-        
-        
-            
+           
 
 def create_sock(sock,addr,comm_sn):
+    bResult=0
     try:
-        bResult=0
+        
         comm__index=find_comm_sn(comm_sn)
         conn_index = find_conn_sn(comm_sn)
         if conn_index >=0:
@@ -2095,8 +2478,10 @@ def create_sock(sock,addr,comm_sn):
         
 def close_sock(sock,addr,comm_sn):
     try:
-        if not comm_sn: #未连接或非法
-            sock.shutdown(2)
+        comm_index = find_comm_sn(comm_sn)
+        if comm_index < 0: #未连接或非法
+            sock.shutdown(0)
+            sleep(5)
             sock.close()
             showinfo = mymodule.getcurrtime() + ' close unlinked client(' + addr[0] +':' + str(addr[1])+ ') succeed'                   
             mymodule.create_log(showinfo)
@@ -2113,15 +2498,17 @@ def close_sock(sock,addr,comm_sn):
                     gui.listBox.delete(j) 
                 
                 mysock=conn_list[conn_index].sock#多次连接
+                conn_list[conn_index].isonline = 0 
                 conn_list.pop(conn_index)
-                sleep(2) #重复发送？？？？？
+                sleep(5) #重复发送？？？？？
                 currentconn=''
                 for i in conn_list:
                     currentconn=currentconn+i.serial_num+';'
                 currentconn=mymodule.getcurrtime()+' '+currentconn+'\n'+'it is will deleted:'+comm_sn
                 mymodule.create_log(currentconn)
-                mysock.shutdown(2)
-                mysock.close()
+                sock.shutdown(0) #0-关闭读通道，1-关闭写通道，2-关闭多写通道
+                sleep(5)
+                sock.close()
                 showinfo = mymodule.getcurrtime() + ' close client(' + comm_sn + ')'+ ' connect shutdown succeed'                   
                 mymodule.create_log(showinfo)
             else:
@@ -2129,9 +2516,8 @@ def close_sock(sock,addr,comm_sn):
     except Exception as e:
         showinfo=mymodule.getcurrtime() + ' close client(' + addr[0]+ str(addr[1]) + ')'+ ' connect shutdown failed:'  +str(e)
         mymodule.create_log(showinfo)
-        
           
-#@with_goto #使用goto语句
+
 def IOT_send_thread():
     #下发任务
     comm_sn=''
@@ -2181,13 +2567,6 @@ def IOT_send_thread():
                         #预计时间非空,或10分钟内，则执行任务
                         elif (not onedata[4]) or (onedata[4] and (order_delta < 600)):
                             if comm_index >= 0 and conn_index >= 0 and dev_index >=0:
-                                reslSQL='update yw_c_control_log_tbl set ExecuteTime=%s,ExecuteResult=%s where id = "' + str(onedata[0]) + '"'
-                                reslconn=mysqlpool.connection()
-                                reslcursor=reslconn.cursor()
-                                reslcursor.execute(reslSQL,args=(datetime.now().strftime('%Y-%m-%d %H:%M:%S'),'4'))
-                                reslconn.commit() 
-                                reslcursor.close()
-                                reslconn.close()
                                 commtype=comm_list[comm_index].commtype
                                 if commtype == 'FKC':
                                     send_thread=myThread(target=FKC_sendorder,args=(dev_index,comm_index,conn_index,onedata))
@@ -2206,6 +2585,9 @@ def IOT_send_thread():
                                     send_thread.start()    
                                 elif commtype == 'YYC':
                                     send_thread=myThread(target=YYC_sendorder,args=(dev_index,comm_index,conn_index,onedata))
+                                    send_thread.start()
+                                elif commtype == 'DYC':
+                                    send_thread=myThread(target=DYC_sendorder,args=(dev_index,comm_index,conn_index,onedata))
                                     send_thread.start()
                                 else:#未识别的网关类型
                                     reslSQL='update yw_c_control_log_tbl set ExecuteTime=%s,ExecuteResult=%s where id = "' + str(onedata[0]) + '"'
@@ -2228,16 +2610,8 @@ def IOT_send_thread():
                                 showinfo=mymodule.getcurrtime()+' '+'('+comm_sn  + ') order_id ('+ str(onedata[0]) +') illegal finished for unconnect comm or unknow dev or unknow connected' 
                                 mymodule.create_log(showinfo)
                     except Exception as e:
-                        sendtimes=sendtimes+1
                         showinfo=mymodule.getcurrtime()+ ' send_order thread has unnormal info: ' +str(e) + ' times:'+str(sendtimes)
-                        mymodule.create_log(showinfo)              
-                if sendtimes > 5:
-                    reslSQL='update yw_c_control_log_tbl set ExecuteTime=%s,ExecuteResult=%s where id = "' + str(onedata[0]) + '"'
-                    reslconn=mysqlpool.connection()
-                    reslcursor=reslconn.cursor()
-                    reslcursor.execute(reslSQL,args=(datetime.now().strftime('%Y-%m-%d %H:%M:%S'),'70')) 
-                    reslcursor.close()
-                    reslconn.close()
+                        mymodule.create_log(showinfo)
             sleep(default_ordertime)
         except Exception as e:
             showinfo=mymodule.getcurrtime()+ ' send_order thread has exited: ' +str(e)
@@ -2247,19 +2621,21 @@ def SFJ_send_thread():
     #下发任务
     comm_sn=''
     while True:
+        sleep(default_statetime)
         try:
-            #指令id,设备id，指令名称，设备地址，预计时间，下发时间，网关序号,设备地址  
-            sSQL='SELECT a.ID, a.Device_ID,ActOrder,b.Device_Address,a.ScheduledTime,a.CreateTime,c.PLC_Number,b.Device_Address FROM sfyth_control_log a '
+            #指令任务id,设备id，指令名称，设备地址，预计时间，下发时间，网关序号,设备地址  
+            sSQL='SELECT a.ID, a.Device_ID,ActOrder,b.Device_Address,a.ScheduledTime,a.CreateTime,c.PLC_Number,c.PLC_Address FROM sfyth_control_log a '
             sSQL= sSQL+'LEFT JOIN sfyth_device b ON a.Device_ID = b.ID  LEFT JOIN sfyth_plc c ON a.PLC_Number = c.PLC_Number '
-            sSQL= sSQL+'WHERE a.ActState = 0 AND (ISNULL(a.ScheduledTime) OR (NOW() > a.ScheduledTime AND DATE_ADD(a.ScheduledTime,INTERVAL 10 MINUTE))) AND c.PLC_Number=%s '
+            sSQL= sSQL+'WHERE a.ActState = 0 AND (ISNULL(a.ScheduledTime) OR (NOW() > a.ScheduledTime AND DATE_ADD(a.ScheduledTime,INTERVAL 10 MINUTE))) '
             sendconn=mysqlpool.connection()
             sendcursor=sendconn.cursor()
-            sendcursor.execute(sSQL,comm_sn)
+            sendcursor.execute(sSQL)
             while True:
                 onedata=sendcursor.fetchone()
                 if not onedata :
                     break
                 else:
+                    comm_sn=onedata[6]
                     order_delta=0
                     if onedata[4]:
                         order_delta=(datetime.now()-onedata[4]).seconds
@@ -2268,7 +2644,7 @@ def SFJ_send_thread():
                         reslSQL='update sfyth_control_log set ActState="1" , ExecuteTime= now() where id = %s' 
                         reslconn=mysqlpool.connection()
                         reslcursor=reslconn.cursor()
-                        reslcursor.execute(reslSQL,args=('4'))
+                        reslcursor.execute(reslSQL,args=(str(onedata[0]),))
                         reslconn.commit() 
                         reslcursor.close()
                         reslconn.close()
@@ -2277,7 +2653,7 @@ def SFJ_send_thread():
                         reslSQL='update sfyth_control_log set ActState="1" , ExecuteTime= now() where id = %s' 
                         reslconn=mysqlpool.connection()
                         reslcursor=reslconn.cursor()
-                        reslcursor.execute(reslSQL,args=('4'))
+                        reslcursor.execute(reslSQL,args=(str(onedata[0]),))
                         reslconn.commit() 
                         reslcursor.close()
                         reslconn.close()
@@ -2290,36 +2666,41 @@ def SFJ_send_thread():
         try:
             #开始时间，时长，水量，肥量，区域，肥液通道,日期、类型、PLC地址、指令id、PLC序列号
             sSQL='SELECT T_Start,T_Interval,T_Gquantity,T_Squantity,T_Area,T_Fertilize,a.T_Date,T_Type,'
-            sSQL= sSQL+ 'b.PLC_Address,a.T_ID FROM  sfyth_task a LEFT JOIN sfyth_plc b '
-            sSQL= sSQL+ 'ON b.PLC_Number = a.PLC_Number WHERE a.T_State=0 AND (ISNULL(a.T_Start) OR(NOW() > a.T_Start AND '
-            sSQL= sSQL+ 'DATE_ADD(DATE_FORMAT(CONCAT(a.T_Date," ",a.T_Start),"%%Y/%%m/%%d %%H:%%i:%%S"),INTERVAL 30 MINUTE)>NOW()) ' 
-            sSQL= sSQL+ 'AND a.PLC_Number=%s ORDER BY a.T_ID ASC'
+            sSQL= sSQL+ 'b.PLC_Address,a.T_ID,b.PLC_Number FROM  sfyth_task a '
+            sSQL= sSQL+ 'LEFT JOIN sfyth_plc b ON b.PLC_Number = a.PLC_Number '
+            sSQL= sSQL+ 'WHERE a.T_State=0 AND (ISNULL(a.T_Start) OR (NOW() > a.T_Start AND  ' 
+            sSQL= sSQL+ 'DATE_ADD(DATE_FORMAT(CONCAT(a.T_Date," ",a.T_Start),"%Y-%m-%d %H:%i:%s"),INTERVAL 30 MINUTE)>NOW())) '
+            sSQL= sSQL+ 'ORDER BY a.T_ID ASC'
             sendconn=mysqlpool.connection()
             sendcursor=sendconn.cursor()
-            sendcursor.execute(sSQL,comm_sn)
+            sendcursor.execute(sSQL)
             while True:
                 onedata=sendcursor.fetchone()
                 if not onedata :
                     break
                 else:
+                    comm_sn=onedata[10]
                     order_delta=0
                     if onedata[0]:
-                        order_delta=(datetime.now()-onedata[0]).seconds
+                        schedulttime=(onedata[6].strftime("%Y-%m-%d")+" 00:00:00")
+                        schedulttime=datetime.strptime(schedulttime,"%Y-%m-%d %H:%M:%S")
+                        schedulttime=schedulttime+timedelta(seconds=onedata[0].seconds)
+                        order_delta=(datetime.now()-schedulttime).seconds
                     #预计时间非空且超过10分钟,关闭任务
                     if  (onedata[0] and (order_delta >= 600)): 
                         reslSQL='UPDATE sfyth_task SET T_State="1" where T_ID=%s' 
                         reslconn=mysqlpool.connection()
                         reslcursor=reslconn.cursor()
-                        reslcursor.execute(reslSQL,args=(onedata[9]))
+                        reslcursor.execute(reslSQL,args=(str(onedata[9]),))
                         reslconn.commit() 
                         reslcursor.close()
                         reslconn.close()
                     #预计时间非空,或10分钟内，则执行任务
                     elif (not onedata[4]) or (onedata[4] and (order_delta < 600)):
-                        reslSQL='update sfyth_control_log set ActState="1" , ExecuteTime= now() where id = %s' 
+                        reslSQL='UPDATE sfyth_task SET T_State="2" where T_ID=%s' 
                         reslconn=mysqlpool.connection()
                         reslcursor=reslconn.cursor()
-                        reslcursor.execute(reslSQL,args=('4'))
+                        reslcursor.execute(reslSQL,args=(str(onedata[9]),))
                         reslconn.commit() 
                         reslcursor.close()
                         reslconn.close()
@@ -2327,6 +2708,38 @@ def SFJ_send_thread():
         except Exception as e:
             showinfo=mymodule.getcurrtime() + ' send task order(' + comm_sn + ')'+ 'failed : '   +str(e)
             mymodule.create_log(showinfo)
+            
+def DYJ_send_thread():
+    #下发任务
+    comm_sn=''
+    while True:
+        try:
+            #打药机任务
+            #任务ID，发送日期，设置时长，设置浓度，预计时间，通讯设备序列号，通讯地址
+            sSQL='SELECT a.ID,a.SendDate,SetInterval,SetDensity,ScheduledTime,b.SerialNumber,b.CodeAddress FROM  yw_g_taskorder_tbl a '
+            sSQL=sSQL+'LEFT JOIN yw_d_commnication_tbl b ON a.`Commucation_ID` = b.ID '
+            sSQL=sSQL+'WHERE (ExecuteResult=0 OR ISNULL(ExecuteResult)) AND (ISNULL(ScheduledTime) OR (NOW() > sendDate AND DATE_ADD(sendDate,INTERVAL 30 MINUTE)>NOW())) '        
+            sSQL=sSQL+'ORDER BY a.ID ASC '
+            sendconn=mysqlpool.connection()
+            sendcursor=sendconn.cursor()
+            sendcursor.execute(sSQL,args=())
+            while True:
+                onedata=sendcursor.fetchone()
+                sendtimes = 0
+                if not onedata:
+                    break
+                else:
+                    try:
+                       send_thread=myThread(target=DYC_sendorder,args=(-10,-10,-10,onedata))
+                       send_thread.start()
+                    except Exception as e:
+                        showinfo=mymodule.getcurrtime()+ 'DYC send_order thread has exited: ' +str(e)
+                        mymodule.create_log(showinfo)            
+            sleep(default_ordertime)
+        except Exception as e:
+            showinfo=mymodule.getcurrtime()+ ' send_order thread has exited: ' +str(e)
+            mymodule.create_log(showinfo)            
+
            
 #本模块运行，导入到其他模块不执行
 if __name__ == '__main__':
@@ -2335,6 +2748,7 @@ if __name__ == '__main__':
     t1.start() 
     connect_sockserver()
     get_devinfo() 
+
     t2 = myThread(target=handle_request, args=(), name='handle_request') 
     t2.setDaemon(True)
     t2.start() 
