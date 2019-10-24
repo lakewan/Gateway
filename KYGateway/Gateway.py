@@ -1778,7 +1778,7 @@ def DYC_sendorder(dev_index,comm_index,conn_index,onedata):
 #任务ID，发送日期，设置时长，设置浓度，预计时间，通讯设备序列号，通讯地址      
     sendtimes=0
     sendresult=''
-#    
+#test    
     while True:
         if  dev_index != -10 and comm_index != -10 and onedata != None:
             try:    
