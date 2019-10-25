@@ -475,7 +475,9 @@ def PLC_sendorder(dev_index,comm_index,conn_index,onedata):
         if sendtimes > 3:
             mymodule.create_log(showinfo)
             showinfo=mymodule.getcurrtime()+' '+'PLC('+comm_sn + ')'+' '+ deviceno+' shutdown for send over 3 times '
-            mymodule.create_log(showinfo)        
+            mymodule.create_log(showinfo) 
+            break
+               
     reslSQL='update yw_c_control_log_tbl set ExecuteTime=%s,ExecuteResult=%s where id = "' + str(onedata[0]) + '"'
     reslconn=mysqlpool.connection()
     reslcursor=reslconn.cursor()
@@ -2438,7 +2440,7 @@ def recv_link(sock,addr):
             illegaltimes= illegaltimes + 1
             showinfo=mymodule.getcurrtime()+'  receive from['+comm_sn+']('+addr[0] + ':' + str(addr[1]) +  ' illegal data :'+str(e) + ' '  + str(illegaltimes) +' times.'
             mymodule.create_log(showinfo)
-        if  illegaltimes > 30 :
+        if  illegaltimes > 20 :
             break
     
     if existsensor:
