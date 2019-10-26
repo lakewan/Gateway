@@ -68,7 +68,7 @@ recv_thread=[] #连接线程数组
 send_thread=[] #发指令线程数组
 collect_thread=[] #采集数据线程数组
 getstate_thread=[] #采集数据线程数组            
-            
+handle_data_scheduler = BackgroundScheduler()            
 
             
 def createGUI():
@@ -78,21 +78,22 @@ def createGUI():
     root.title('恺易网关') #标题
     root.mainloop() #获取界面事件
     
-#通讯设备：ID,编号，序列号，通讯地址，公司ID，类型，参数,类别，通道数量
+#通讯设备：ID,编号，序列号，通讯地址，公司ID，类型，参数,类别，控制通道最大数量，传感通道最大通道数
 class comm_class():
-    def __init__(self,commid,commcode,serial_num,commaddr,companyid,commtype,commpara,commclass,passnum):
+    def __init__(self,commid,commcode,serial_num,commaddr,companyid,commtype,commpara,commclass,controlmax,sensormax):
         self.commid = commid            #通讯设备id
         self.commcode = commcode        #编号：水肥机没有编号，以ID代替
-#        self.commname = commname        #名称    
+#        self.commname = commname       #名称    
         self.serial_num = serial_num    #序列号
         self.commaddr = commaddr        #通讯地址      
         self.companyid = companyid      #所属公司ID
         self.commtype = commtype        #类型：PLC、KLC、FKC、XPC、YYC、SFJ-1200、SFJ-0804
-#        self.commclass= commclass       #设备类别，水肥机：KY2016-A，KY2016-B，通讯设备：FKC,KLC,PLC,XPH,
+#        self.commclass= commclass      #设备类别，水肥机：KY2016-A，KY2016-B，通讯设备：FKC,KLC,PLC,XPH,
         self.commpara= commpara         #参数，水肥机-肥液路数，通讯设备-采集间隔
         self.commclass= commclass       #设备类别：1-物联网设备，2-水肥机，3-棚博士        
-        self.passnum= passnum           #控制通道数
-
+        self.controlmax= controlmax     #控制通道最大通道数
+        self.sensormax= sensormax       #传感器通道对到通道数
+        
 #控制器：ID,编号，地址，类型，所属网关序号、设备参数、设备地块、设备公式、类别    
 class controller_class():
     def __init__(self,devid,devcode,devaddr,devtype,commnum,devpara,blockid,devformula,devclass):
@@ -245,7 +246,7 @@ def PLC_handlerecv(comm_index,sdata):
     temp1=sdata[:-4]
     temp2=sdata[-4:]
     a=mymodule.crc16(temp1,0).replace(' ','')
-    passnum=comm_list[comm_index].passnum
+
     if True:
         sOrder=sdata[2:4]
         #获取记录
@@ -253,12 +254,12 @@ def PLC_handlerecv(comm_index,sdata):
             if sOrder == '03' and len(sdata)<=1024:
                 print(sdata)
 
-            elif sOrder == '0f' or (sOrder == '05' and sdata[16:20]=='020f' ):#粘包
+            elif sOrder == '0f' or (sOrder == '05' and sdata[18:20]=='0f' ):#粘包
                 if sOrder == '0f':           
                 #0000201910180001 020503e8ff000c79 020f 0c50(addr) 0010(out num) 02(byte num) 3f02(数据) a6b1指令回传
                     lendata=int(sdata[8:12],16)
                     dataset=sdata[14:-4]
-                elif sOrder == '05' and sdata[16:20]=='020f':
+                elif sOrder == '05' and sdata[18:20]=='0f':
                     lendata=int(sdata[24:28],16)
                     dataset=sdata[30:-4]
                 if lendata > 0:
@@ -273,7 +274,11 @@ def PLC_handlerecv(comm_index,sdata):
                             tempb=tempb+('00000000'+bin(int(tempa,16)).replace('0b',''))[-8:][::-1]
                             statusvar=tempb
                         for i in range(0,lendata):
-                            control_index= find_devaddr(i+1,comm_sn,10)
+                            control_index=-1
+                            if i < comm_list[comm_index].controlmax:
+                                control_index= find_devaddr(i+1,comm_sn,10)
+                            else:
+                                continue
                             if control_index >=0:
                                 if controller_list[control_index].devtype=='1':  
                                     contrlstate = statusvar[i]
@@ -355,7 +360,7 @@ def PLC_sendorder(dev_index,comm_index,conn_index,onedata):
                             sendstr=sendstr.replace(' ','')
                             sendresult1=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
                             if sendresult1 == None:
-                                sleep(1)
+                                sleep(2)
                                 sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:]
                                 sendstr = sendstr + ' ' + '05'
                                 scontlnum = ('0000'+hex(icontlnum-1+2000).replace('0x',''))[-4:]
@@ -397,7 +402,7 @@ def PLC_sendorder(dev_index,comm_index,conn_index,onedata):
                             sendstr=sendstr.replace(' ','')
                             sendresult1=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
                             if sendresult1 == None:
-                                sleep(1)
+                                sleep(2)
                                 sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:]
                                 sendstr = sendstr + ' ' + '05'
                                 scontlnum = ('0000'+hex(icontlnum+2000).replace('0x',''))[-4:]
@@ -461,15 +466,13 @@ def PLC_sendorder(dev_index,comm_index,conn_index,onedata):
                     
                 elif onedata[2] == 'GET-STATE': 
                      pass          
-                       
         except Exception as err:
             showinfo =mymodule.getcurrtime()+  ' PLC('+comm_sn + ') send order exception : '+str(err)
             mymodule.create_log(showinfo)
             sendtimes=sendtimes+1
             sleep(60)
         if sendtimes > 5:
-            addr=conn_list[conn_index].addr
-            close_sock(sock,addr,comm_sn)
+            conn_list[conn_index].isonline = 0
             mymodule.create_log(showinfo)
             showinfo=mymodule.getcurrtime()+' '+'PLC('+comm_sn + ')'+' '+ deviceno+' thread shutdown for send order over 3 times '
             mymodule.create_log(showinfo) 
@@ -498,9 +501,14 @@ def KLC_handlerecv(comm_index,sdata):
             if sOrder == '03' and sdata[0:2] == "01" :
                 sSQL="INSERT INTO yw_c_sensordata_tbl (Device_ID,Device_Code,ReportTime,ReportValue,Block_ID) values "
                 for i in range(0,8):
+                    
                     sensordata = datatemp[0:8]
                     datatemp=datatemp[8:]
-                    sensor_index= find_devaddr(i+1,comm_sn,11)
+                    sensor_index=-1
+                    if i < comm_list[comm_index].sensormax:
+                        sensor_index= find_devaddr(i+1,comm_sn,11)
+                    else:
+                        continue
                     if sensor_index >=0:  
                         sensorformat=sensordata[2:4]
                         formatstr=('0000000'+bin(int(sensorformat,16)).replace('0b',''))[-8:]
@@ -749,8 +757,7 @@ def KLC_sendorder(dev_index,comm_index,conn_index,onedata):
             sendtimes=sendtimes+1
             sleep(60)
         if sendtimes > 5:
-            addr=conn_list[conn_index].addr
-            close_sock(sock,addr,comm_sn)
+            conn_list[conn_index].isonline = 0
             mymodule.create_log(showinfo)
             showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn + ')'+' '+ deviceno+' send thread shutdown for over 3 times '
             mymodule.create_log(showinfo)
@@ -857,23 +864,12 @@ def SFJ_handlerecv(comm_index,sdata):
                     bState=bState+('0000'+bin(int(sState[i],16)).replace('0b',''))[-4:]
                 bState=bState[::-1]
                 
-                sSQL='SELECT id,Device_Address FROM sfyth_device WHERE PLC_Number = %s ORDER BY Device_Address ASC'
-                sendconn=mysqlpool.connection()
-                sendcursor=sendconn.cursor()
-                sendcursor.execute(sSQL,comm_sn)
-                while True:
-                    onedata=sendcursor.fetchone()
-                    if not onedata:
-                        break
-                    else:
-                        devid.append(onedata[0])
-                        devch.append(onedata[1])
-                sendcursor.close()
-                sendconn.close()
                 sSQL="insert into sfyth_device(id,state) values"
-                for i in range(0,len(devch)):
-                    dev_index=devch.index(str(i+1))
+                controlmax=comm_list[comm_index].controlmax
+                for i in range(0,controlmax):
+                    dev_index= find_devaddr(i+1,comm_sn,20)
                     if dev_index >=0:
+                        devid=dev_list[dev_index].devid
                         sSQL = sSQL+"('"+str(devid[dev_index])+"','"+str(bState[i])+"'),"
                 try:
                     if sSQL[-2:] =='),':
@@ -904,7 +900,6 @@ def SFJ_sendorder(devtype,onedata):
                     orderAct=onedata[2]
                     devAddr=int(onedata[3])
                     plcAddr=onedata[7]
-                   
                     sock=conn_list[conn_index].sock
                     if orderAct == 'AC-OPEN':
                         sOrder=('00'+hex(int(plcAddr,10)).replace('0x',''))[-2:]
@@ -1116,7 +1111,11 @@ def XPC_handlerecv(comm_index,sdata):
                 for i in range(0,16):
                     hexdata = sdata[i*4+6:i*4+10]
                     if (str(hexdata)!='7fff' and hexdata!='7FFF'):
-                        sensor_index= find_devaddr(i+1,comm_sn,11)
+                        sensor_index=-1
+                        if i < comm_list[comm_index].sensormax:
+                            sensor_index= find_devaddr(i+1,comm_sn,11)
+                        else:
+                            continue
                         rData=''
                         if sensor_index >=0:  
                             rData= int(hexdata[:-2],16)*16*16 + int(hexdata[-2:],16)
@@ -1211,7 +1210,8 @@ def XPC_sendorder(dev_index,comm_index,conn_index,onedata):
             sendtimes=sendtimes+1
             showinfo=mymodule.getcurrtime() + ' XPC(' + comm_sn + ')'+ ' collect data exception : '+str(e)
             mymodule.create_log(showinfo)
-        if sendtimes > 3:
+        if sendtimes > 5:
+            conn_list[conn_index].isonline = 0
             break
                                
 def YYC_handlerecv(comm_index,sdata):
@@ -1232,7 +1232,12 @@ def YYC_handlerecv(comm_index,sdata):
                 for i in range(0,16):
                     recvdata = sdata[i*8+6:i*8+14]
                     recvdata=recvdata[-4:]+recvdata[:4]
-                    sensor_index= find_devaddr(i+1,comm_sn,11)
+
+                    sensor_index=-1
+                    if i < comm_list[comm_index].sensormax:
+                        sensor_index= find_devaddr(i+1,comm_sn,11)
+                    else:
+                        continue
                     rData=''
                     if sensor_index >=0:
                         rData= unpack('!f', bytes.fromhex(recvdata))[0]
@@ -1336,8 +1341,8 @@ def YYC_sendorder(dev_index,comm_index,conn_index,onedata):
             sendtimes=sendtimes+1
             showinfo=mymodule.getcurrtime() + ' YYC(' + comm_sn + ')'+ ' collect data exception : '+str(e)
             mymodule.create_log(showinfo)
-        if sendtimes > 3:
-            break
+        if sendtimes > 5:
+            conn_list[conn_index].isonline = 0
 def FKC_handlerecv(comm_index,sdata):
     #020300207fff02ea00000000000000000000000000e400de00007fff0000003f00020290f305
     comm_sn=comm_list[comm_index].serial_num
@@ -1356,7 +1361,11 @@ def FKC_handlerecv(comm_index,sdata):
                     
                     hexdata = sdata[i*4+8:i*4+12]
                     if (str(hexdata)!='7fff' and hexdata!='7FFF'):
-                        sensor_index= find_devaddr(i+1,comm_sn,11)
+                        sensor_index=-1
+                        if i < comm_list[comm_index].sensormax:
+                            sensor_index= find_devaddr(i+1,comm_sn,11)
+                        else:
+                            continue
                         if sensor_index >=0:  
                             rData= int(hexdata[:-2],16)*16*16 + int(hexdata[-2:],16)
                             sensorformula=sensor_list[sensor_index].formula
@@ -1425,7 +1434,11 @@ def FKC_handlerecv(comm_index,sdata):
                 sSQL="insert into yw_d_controller_tbl(id,onoff) values "
                 try:
                     for i in range(0,16):
-                        control_index= find_devaddr(i+1,comm_sn,10)
+                        control_index= -1
+                        if i < comm_list[comm_index].controlmax:
+                            control_index= find_devaddr(i+1,comm_sn,10)
+                        else:
+                            continue
                         if control_index >=0:  
                             contrlstate = sdata[i*2+4:i*2+6]
                             if  int(contrlstate,16)==1:
@@ -1496,7 +1509,7 @@ def FKC_sendorder(dev_index,comm_index,conn_index,onedata):
                         sendstr=sendstr.replace(' ','')
                         sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
                         if sendresult==None: 
-                            sleep(1)
+                            sleep(2)
                             sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:] + ' '
                             sendstr = sendstr + '72' + ' '
                             sendstr = sendstr + ('00'+hex(icontlnum).replace('0x',''))[-2:] + ' '
@@ -1547,7 +1560,7 @@ def FKC_sendorder(dev_index,comm_index,conn_index,onedata):
                         sendstr=sendstr.replace(' ','')
                         sendresult = sock.sendall(bytes().fromhex(sendstr))
                         if sendresult == None:
-                            sleep(1)
+                            sleep(2)
                             sendstr = ('00'+hex(icommnum).replace('0x',''))[-2:] + ' '
                             sendstr = sendstr + '72' + ' '
                             sendstr = sendstr + ('00'+hex(icontlnum+1).replace('0x',''))[-2:] + ' '
@@ -1658,7 +1671,9 @@ def FKC_sendorder(dev_index,comm_index,conn_index,onedata):
             showinfo =mymodule.getcurrtime()+' '+ 'FKC('+comm_sn + ') send order failture : '+str(err)
             mymodule.create_log(showinfo)
             sendtimes=sendtimes+1
-        if sendtimes > 3:
+            sleep(60)
+        if sendtimes > 5:
+            conn_list[conn_index].isonline = 0
             mymodule.create_log(showinfo)
             showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn + ')'+' '+ deviceno+' shutdown for send over 3 times '
             mymodule.create_log(showinfo)
@@ -1678,7 +1693,7 @@ def DYC_handlerecv(comm_index,sdata):
     temp1=sdata[:-4]
     temp2=sdata[-4:]
     a=mymodule.crc16(temp1,0).replace(' ','')
-    passnum=comm_list[comm_index].passnum
+
     if True:
         sOrder=sdata[2:4]
         #获取记录
@@ -1783,7 +1798,11 @@ def DYC_handlerecv(comm_index,sdata):
                             tempb=tempb+('00000000'+bin(int(tempa,16)).replace('0b',''))[-8:][::-1]
                             statusvar=tempb
                         for i in range(0,lendata):
-                            control_index= find_devaddr(i+1,comm_sn,10)
+                            control_index=-1
+                            if i < comm_list[comm_index].controlmax:
+                                control_index= find_devaddr(i+1,comm_sn,10)
+                            else:
+                                continue
                             if control_index >=0:
                                 if controller_list[control_index].devtype=='1':  
                                     contrlstate = statusvar[i]
@@ -1904,7 +1923,10 @@ def DYC_sendorder(dev_index,comm_index,conn_index,onedata):
                 showinfo =mymodule.getcurrtime()+  ' DYC('+comm_sn + ') send order failture : '+str(err)
                 mymodule.create_log(showinfo)
                 sendtimes=sendtimes+1
+                sleep(60)
             if sendtimes > 5:
+                addr=conn_list[conn_index].addr
+                close_sock(sock,addr,comm_sn)
                 mymodule.create_log(showinfo)
                 showinfo=mymodule.getcurrtime()+' '+'DYC('+comm_sn + ')'+' task shutdown for send over 3 times '
                 mymodule.create_log(showinfo)
@@ -1971,7 +1993,9 @@ def DYC_sendorder(dev_index,comm_index,conn_index,onedata):
                 showinfo =mymodule.getcurrtime()+  ' DYC('+comm_sn + ') Task send order failture : '+str(err)
                 mymodule.create_log(showinfo)
                 sendtimes=sendtimes+1
+                sleep(60)
             if sendtimes > 5:
+                conn_list[conn_index].isonline = 0
                 mymodule.create_log(showinfo)
                 showinfo=mymodule.getcurrtime()+' '+'DYC('+comm_sn + ')'+' '+ deviceno+' shutdown for send over 3 times '
                 mymodule.create_log(showinfo)        
@@ -2004,96 +2028,30 @@ def collect_data(comm_index):
             sendresult=False
             if commtype=='SFJ-0804' or commtype=='SFJ-1200':
                 #未来考虑检测液位、流量等
-                '''
-                ollect_thread==myThread(target=SFJ_sendorder,args=(-1,comm_index,conn_index,[0,0,"COLLECT-DATA"]))
-                collect_thread.start()
-                '''
                 pass
             elif commtype=='FKC':
                 #采集任务信息
                 collect_thread==myThread(target=FKC_sendorder,args=(-1,comm_index,conn_index,[0,0,"COLLECT-DATA"]))
                 collect_thread.start()
-                '''
-                sendstr= ('00'+hex(int(comm_list[comm_index].commaddr)).replace('0x',''))[-2:]
-                sendstr=sendstr+' '+ '03'
-                sendstr=sendstr+' '+ '00 00' #起始地址
-                sendstr=sendstr+' '+ '00 10' #数量
-                sendstr=sendstr+' '+ mymodule.crc16(sendstr,0)
-                showinfo=mymodule.getcurrtime() + ' collect (' + comm_sn + ')'+ 'sensor data:'  + sendstr
-                #sendstr='02 03 00 00 00 10 44 35'                    
-                sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
-                 '''
+
             elif commtype=='XPC':
                 collect_thread==myThread(target=XPC_sendorder,args=(-1,comm_index,conn_index,[0,0,"COLLECT-DATA"]))
                 collect_thread.start()
-                '''
-                sendstr= ('00'+hex(int(comm_list[comm_index].commaddr)).replace('0x',''))[-2:]
-                sendstr=sendstr+' '+ '03'
-                sendstr=sendstr+' '+ '00 00' #起始地址
-                sendstr=sendstr+' '+ '00 10' #数量
-                sendstr=sendstr+' '+ mymodule.crc16(sendstr,0)
-                showinfo=mymodule.getcurrtime() + ' collect (' + comm_sn + ')'+ 'sensor data:'  + sendstr
-                #sendstr='02 03 00 00 00 10 44 35'                    
-                sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
-                '''
+
             elif commtype=='KLC':
                 collect_thread==myThread(target=KLC_sendorder,args=(-1,comm_index,conn_index,[0,0,"COLLECT-DATA"]))
                 collect_thread.start()
-                '''
-                sendstr= '15 01 00 00 00 06 01'
-                sendstr=sendstr+' '+ '03'
-                sendstr=sendstr+' '+ '00 00' #起始地址
-                sendstr=sendstr+' '+ '00 20' #数量
-                #sendstr=sendstr+' '+ crc16(sendstr,0)
-                showinfo=mymodule.getcurrtime() + ' collect (' + comm_sn + ')'+ 'sensor data:'  + sendstr
-                #sendstr='02 03 00 00 00 10 44 35'                    
-                sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
-                '''
+
             elif commtype=='YYC':
                 collect_thread==myThread(target=YYC_sendorder,args=(-1,comm_index,conn_index,[0,0,"COLLECT-DATA"]))
                 collect_thread.start()
-                '''
-                sendstr= ('00'+hex(int(comm_list[comm_index].commaddr)).replace('0x',''))[-2:]
-                sendstr=sendstr+' '+ '03'
-                sendstr=sendstr+' '+ '00 00' #起始地址
-                sendstr=sendstr+' '+ '00 20' #数量
-                sendstr=sendstr+' '+ mymodule.crc16(sendstr,0)
-                showinfo=mymodule.getcurrtime() + ' collect (' + comm_sn + ')'+ 'sensor data:'  + sendstr
-                #sendstr='02 03 00 00 00 10 44 35'                    
-                sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
-                '''
+
             elif commtype=='PLC':
                 pass
-                '''
-                ollect_thread==myThread(target=SFJ_sendorder,args=(-1,comm_index,conn_index,[0,0,"Collect"]))
-                collect_thread.start()
-                '''
+
             elif commtype =='DYC':
                 pass
-                '''
-                sendstr= ('00'+hex(int(comm_list[comm_index].commaddr)).replace('0x',''))[-2:]
-                sendstr=sendstr+' '+ '03'
-                sendstr=sendstr+' '+ '00 CD' #起始地址40206-1
-                sendstr=sendstr+' '+ '00 01' #数量
-                sendstr=sendstr+' '+ mymodule.crc16(sendstr,0)
-                showinfo=mymodule.getcurrtime() + ' collect (' + comm_sn + ')'+ 'sensor data:'  + sendstr
-                sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
-                '''
 
-            '''
-            if sendresult == None:
-
- 
-                conn_list[conn_index].lasttime=datetime.now()
-                overtimegap=datetime.now()-conn_list[conn_index].lasttime
-                conn_list[conn_index].overtime=overtimegap.days*24*3600+overtimegap.seconds
-                showinfo=showinfo+' succeed'
-                mymodule.create_log(showinfo) 
- 
-            else:
-                showinfo=showinfo+' failed'
-                mymodule.create_log(showinfo)
-            '''
     except Exception as e:
         showinfo=mymodule.getcurrtime()+' '+'('+comm_sn + ') collect data error:'  +str(e)
         mymodule.create_log(showinfo) 
@@ -2192,7 +2150,14 @@ def get_devinfo():
 #通道数量：水肥机：控制通道数，通讯设备：控制通道数
 #网关类别：2-水肥机
     if commtype_valid == 1 or commtype_valid == 2 :
-        sSQL='SELECT ID,PLC_Name,PLC_Number,PLC_Address,Company_ID,PLC_GWType,PassNumber,TotalPass FROM sfyth_plc WHERE Is_Delete = 0'
+        sSQL='SELECT e.ID,e.PLC_Name,e.PLC_Number,e.PLC_Address,e.Company_ID,e.PLC_GWType,e.PassNumber,MAX(controladdr),MAX(sensoraddr) FROM '
+        sSQL=sSQL+'(SELECT a.ID,PLC_Name,a.PLC_Number,PLC_Address,a.Company_ID,PLC_GWType,PassNumber,CAST(b.`Device_Address` AS UNSIGNED) AS controladdr, NULL sensoraddr FROM sfyth_plc a '
+        sSQL=sSQL+'LEFT JOIN `sfyth_device` b ON b.`PLC_Number` = a.`PLC_Number` '
+        sSQL=sSQL+'WHERE a.Is_Delete = 0 AND b.`Is_Delete` = 0 AND CAST(b.`Device_Type` AS UNSIGNED) < 7 '
+        sSQL=sSQL+'UNION ALL '
+        sSQL=sSQL+'SELECT c.ID,PLC_Name,c.PLC_Number,PLC_Address,c.Company_ID,PLC_GWType,PassNumber,NULL controladdr, CAST(d.`Device_Address` AS UNSIGNED) AS sensoraddr FROM sfyth_plc c '
+        sSQL=sSQL+'LEFT JOIN `sfyth_device` d ON d.`PLC_Number` = c.`PLC_Number` '
+        sSQL=sSQL+'WHERE c.Is_Delete = 0 AND d.`Is_Delete` = 0 AND CAST(d.`Device_Type` AS UNSIGNED) > 7) e GROUP BY e.plc_number'
         try:
             recconn=mysqlpool.connection()
             reccursor=recconn.cursor()
@@ -2210,7 +2175,7 @@ def get_devinfo():
                                 commindex=0
                                 break
                     if commindex==-1 or len(comm_list)==0:
-                        onecomm=comm_class(onedata[0],onedata[1],onedata[2],onedata[3],onedata[4],onedata[5],onedata[6],2,onedata[7])
+                        onecomm=comm_class(onedata[0],onedata[1],onedata[2],onedata[3],onedata[4],onedata[5],onedata[6],2,onedata[7],onedata[8])
                         comm_list.append(onecomm)
             reccursor.close()                 
             recconn.close()
@@ -2250,16 +2215,28 @@ def get_devinfo():
             showinfo=mymodule.getcurrtime()+' SFJ-controller configure get failure：'+str(err)
             mymodule.create_log(showinfo)        
 
-#物联网通讯设备：ID,编号，序列号，通讯地址，公司ID，类型，参数,类别，通道数量
+#物联网通讯设备：ID,编号，序列号，通讯地址，公司ID，类型，参数,类别，控制通道最大数量，传感通道最大通道数
 #设备参数：KLC、PLC、XPC、FKC、YYC
 #参数：通讯设备-采集间隔
 #网关类别：1-物联网
     if commtype_valid == 0 or commtype_valid == 2 or commtype_valid == 3:
-        sSQL='SELECT a.ID,a.Code,a.SerialNumber,a.CodeAddress,a.Company_ID,c.ClassName,`Interval`,a.numofpass FROM yw_d_commnication_tbl a '
+        sSQL='SELECT n.ID,n.Code,n.SerialNumber,n.CodeAddress,n.Company_ID,n.ClassName,n.`Interval`, COUNT(controlport) AS controlnum,COUNT(sensorport) AS sensorsum FROM '
+        sSQL=sSQL+'(SELECT e.*,NULL controlport,f.PortNum AS sensorport FROM '
+        sSQL=sSQL+'(SELECT a.ID,a.Code,a.SerialNumber,a.CodeAddress,a.Company_ID,c.ClassName,`Interval` FROM yw_d_commnication_tbl a '
         sSQL=sSQL+'LEFT JOIN yw_d_devicemodel_tbl b ON a.Model_ID = b.ID '
         sSQL=sSQL+'LEFT JOIN yw_d_deviceclass_tbl c ON b.DeviceClass_ID= c.ID '
-        sSQL=sSQL+'LEFT JOIN `ys_parameter_tbl` d ON b.`Formula` = d.`Parameter_Key` '
-        sSQL=sSQL+'WHERE a.`UsingState`="1" AND b.`State`="1" AND d.`Parameter_Class` = "YW-JSGS"'
+        sSQL=sSQL+'LEFT JOIN ys_parameter_tbl d ON b.Formula = d.Parameter_Key '
+        sSQL=sSQL+'WHERE a.UsingState="1" AND b.State="1" AND d.Parameter_Class = "YW-JSGS") e '
+        sSQL=sSQL+'LEFT JOIN yw_d_sensor_tbl f ON f.Commucation_ID = e.id where f.`UsingState` = "1" '
+        sSQL=sSQL+'UNION ALL '
+        sSQL=sSQL+'SELECT l.*,m.PortNum,NULL sensorport FROM '
+        sSQL=sSQL+'(SELECT g.ID,g.Code,g.SerialNumber,g.CodeAddress,g.Company_ID,i.ClassName,`Interval` FROM yw_d_commnication_tbl g '
+        sSQL=sSQL+'LEFT JOIN yw_d_devicemodel_tbl h ON g.Model_ID = h.ID '
+        sSQL=sSQL+'LEFT JOIN yw_d_deviceclass_tbl i ON h.DeviceClass_ID= i.ID '
+        sSQL=sSQL+'LEFT JOIN ys_parameter_tbl k ON h.Formula = k.Parameter_Key '
+        sSQL=sSQL+'WHERE g.UsingState="1" AND h.State="1" AND k.Parameter_Class = "YW-JSGS") l '
+        sSQL=sSQL+'LEFT JOIN yw_d_controller_tbl m ON m.Commucation_ID = l.id WHERE m.UsingState = "1") n '
+        sSQL=sSQL+'GROUP BY n.id'
         try:
             recconn=mysqlpool.connection()
             reccursor=recconn.cursor()
@@ -2276,7 +2253,7 @@ def get_devinfo():
                                     commindex=0
                                     break
                     if commindex==-1 or len(comm_list)==0:
-                        onecomm=comm_class(onedata[0],onedata[1],onedata[2],onedata[3],onedata[4],onedata[5],onedata[6],1,onedata[7])
+                        onecomm=comm_class(onedata[0],onedata[1],onedata[2],onedata[3],onedata[4],onedata[5],onedata[6],1,onedata[7],onedata[8])
                         #onecomm=onedata
                         comm_list.append(onecomm)
             reccursor.close()                 
@@ -2430,9 +2407,7 @@ def recv_link(sock,addr):
                                 sendtimes=0
                                 conn_list[conn_index].lasttime=datetime.now()
                                 conn_list[conn_index].overtime=0
-                              
                                 FKC_handlerecv(comm_index,sdata1)
-                           
                             elif commtype == 'XPC':#新普惠
                                 sendtimes=0
                                 conn_list[conn_index].lasttime=datetime.now()
@@ -2462,8 +2437,7 @@ def recv_link(sock,addr):
                                 sendtimes=0
                                 conn_list[conn_index].lasttime=datetime.now()
                                 conn_list[conn_index].overtime=0
-                                DYC_handlerecv(comm_index,sdata1)    
-                                        
+                                DYC_handlerecv(comm_index,sdata1)
                             else: #未知公式
                                 sendtimes=sendtimes+1
                                 showinfo = mymodule.getcurrtime() + ' get comm_device (' + comm_sn + ')'+ ' unknow type'
@@ -2473,9 +2447,6 @@ def recv_link(sock,addr):
                             sendtimes=sendtimes + 1
                             showinfo = mymodule.getcurrtime() + ' comm_device (' + comm_sn + ')'+ ' data length error:'+sdata
                             mymodule.create_log(showinfo)
-                        if sendtimes > 5:
-                            conn_list[conn_index].isonline = 0
-                            break
                 else :#未连接请求
                     bResult=False
                     comm_index = find_comm_sn(comm_sn)
@@ -2489,32 +2460,12 @@ def recv_link(sock,addr):
                         illegaltimes= illegaltimes + 1
                         showinfo =mymodule.getcurrtime() + ' receive client (' + comm_sn + ')' +' error connect data: ' + sdata +' ' + str(illegaltimes) +' times.'                 
                         mymodule.create_log(showinfo)
-                    
-                    if bResult:
-                        if comm_list[comm_index].commclass == 1:
-                            for i in range(1,16):
-                                controller_index = find_devaddr(i,comm_sn,10)
-                                if controller_index >= 0:
-                                    existcontroller = 1
-                                    break
-                            for i in range(1,16):
-                                sensor_index = find_devaddr(i,comm_sn,11)
-                                if sensor_index >= 0:
-                                    existsensor = 1
-                                    break
-                        elif comm_list[comm_index].commclass == 2:
-                            for i in range(1,16):
-                                controller_index = find_devaddr(i,comm_sn,20)
-                                if controller_index >= 0:
-                                    existcontroller = 1
-                                    break
-                            for i in range(1,16):
-                                sensor_index = find_devaddr(i,comm_sn,21)
-                                if sensor_index >= 0:
-                                    existsensor = 1
-                                    break        
-                        handle_data_scheduler = BackgroundScheduler()
                         commtype = comm_list[comm_index].commtype
+                    if comm_list[comm_index].sensormax != None and  comm_list[comm_index].sensormax != 'NULL':
+                        existsensor=1
+                    if comm_list[comm_index].controlmax != None and  comm_list[comm_index].controlmax != 'NULL':    
+                        existcontroller=1
+                    if bResult:
                         if commtype=="KLC" or commtype=="FKC" or commtype=="XPC" or commtype=="YYC" :
                             if existsensor:
                                 trigger_data = IntervalTrigger(seconds=default_collecttime)
@@ -2524,16 +2475,9 @@ def recv_link(sock,addr):
                                 trigger_state = IntervalTrigger(seconds=default_statetime)    
                                 handle_data_scheduler.add_job(get_state,trigger_state,coalesce=True,max_instances=5,id='cont'+comm_sn,args=(comm_index,))
                         handle_data_scheduler.start()
-                    
-                    
     #异常数据,是否需要退出
         except Exception as e:
-            illegaltimes= illegaltimes + 1
-            showinfo=mymodule.getcurrtime()+'  receive from['+comm_sn+']('+addr[0] + ':' + str(addr[1]) +  ' illegal data :'+str(e) + ' '  + str(illegaltimes) +' times.'
-            mymodule.create_log(showinfo)
-        if  illegaltimes > 20 :
-            break
-    
+            pass
     if existsensor:
         handle_data_scheduler.remove_job('sensor'+comm_sn)
     elif existcontroller:
@@ -2543,7 +2487,8 @@ def recv_link(sock,addr):
         conn_list[conn_index].isonline = 0
     sleep(2)
     close_sock(sock,addr,comm_sn)
-           
+
+
 
 def create_sock(sock,addr,comm_sn):
     bResult=0
