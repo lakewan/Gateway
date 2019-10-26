@@ -63,13 +63,31 @@ sensor_list=[] #传感器数据
 conn_list = []#客户端连接信息，端口号，地址，序列号，超时时间
 unknow_list = []
 
+#recv_thread=[] #连接线程数组
+#send_thread=[] #发指令线程数组
+#collect_thread=[] #采集数据线程数组
+#getstate_thread=[] #采集数据线程数组            
 
-recv_thread=[] #连接线程数组
-send_thread=[] #发指令线程数组
-collect_thread=[] #采集数据线程数组
-getstate_thread=[] #采集数据线程数组            
-handle_data_scheduler = BackgroundScheduler()            
-
+            
+#生成MySQL连接池        
+try:
+    mysqlpool=PooledDB(
+        creator=pymysql,
+        maxconnections=10,
+        mincached=2,        #最小的空闲连接
+        maxcached=4,        #最大的空闲连接
+        maxshared=0,        #当连接数达到这个数，新请求的连接会分享已经分配出去的连接
+        blocking=True,
+        host=linkhost,
+        port=int(linkport),
+        user=linkuser,
+        password=linkpwd,
+        charset='utf8',
+        db=linkdb
+        )
+except Exception as e:
+    showinfo=mymodule.getcurrtime()+' database link failure:'+str(e)
+    mymodule.create_log(showinfo)
             
 def createGUI():
     global gui    
@@ -143,25 +161,7 @@ class unknow_class():
         self.addr = addr                #连接IP
         self.linktimes = linktimes    #设备序列号   
      
-#生成MySQL连接池        
-try:
-    mysqlpool=PooledDB(
-        creator=pymysql,
-        maxconnections=10,
-        mincached=2,        #最小的空闲连接
-        maxcached=4,        #最大的空闲连接
-        maxshared=0,        #当连接数达到这个数，新请求的连接会分享已经分配出去的连接
-        blocking=True,
-        host=linkhost,
-        port=int(linkport),
-        user=linkuser,
-        password=linkpwd,
-        charset='utf8',
-        db=linkdb
-        )
-except Exception as e:
-    showinfo=mymodule.getcurrtime()+' database link failure:'+str(e)
-    mymodule.create_log(showinfo)
+
 def find_comm_sn(for_value):
     _index=-1
     bResult=False
@@ -327,7 +327,7 @@ def PLC_handlerecv(comm_index,sdata):
 def PLC_sendorder(dev_index,comm_index,conn_index,onedata):
 #指令id,设备id，指令名称，指令参数(延迟时间)，预计时间，下发时间，网关序号,设备编号        
     comm_sn=comm_list[comm_index].serial_num
-    deviceno=onedata[7]
+    #deviceno=onedata[7]
     icommnum = int(comm_list[comm_index].commaddr)
     icontlnum = int(controller_list[dev_index].devaddr)
     sock=conn_list[conn_index].sock
@@ -336,6 +336,7 @@ def PLC_sendorder(dev_index,comm_index,conn_index,onedata):
     while True:
         try:
             if onedata != None:
+                deviceno=onedata[7]
                 if onedata[2] == 'AC-OPEN':
                     if onedata[3] != None and onedata[3] != 'NULL':
                         if int(onedata[3]) > 0:
@@ -379,6 +380,7 @@ def PLC_sendorder(dev_index,comm_index,conn_index,onedata):
                             sendtimes=sendtimes+1
                                  
                 elif  onedata[2] == 'AC-CLOSE':
+                    deviceno=onedata[7]
                     if onedata[3] != None and onedata[3] != 'NULL':
                         if int(onedata[3]) > 0:
                             sleep(int(onedata[3])) 
@@ -421,6 +423,7 @@ def PLC_sendorder(dev_index,comm_index,conn_index,onedata):
                         sendtimes=sendtimes+1
                             
                 elif  onedata[2] == 'AC-STOP':
+                    deviceno=onedata[7]
                     if onedata[3] != None and onedata[3] != 'NULL':
                         if int(onedata[3]) > 0 :
                            sleep(int(onedata[3]))
@@ -474,7 +477,7 @@ def PLC_sendorder(dev_index,comm_index,conn_index,onedata):
         if sendtimes > 5:
             conn_list[conn_index].isonline = 0
             mymodule.create_log(showinfo)
-            showinfo=mymodule.getcurrtime()+' '+'PLC('+comm_sn + ')'+' '+ deviceno+' thread shutdown for send order over 3 times '
+            showinfo=mymodule.getcurrtime()+' '+'PLC('+comm_sn + ')'+' thread shutdown for send order over 3 times '
             mymodule.create_log(showinfo) 
             break
     if dev_index >= 0:           
@@ -654,7 +657,7 @@ def KLC_handlerecv(comm_index,sdata):
 def KLC_sendorder(dev_index,comm_index,conn_index,onedata):
 #指令id,设备id，指令名称，指令参数(延迟时间)，预计时间，下发时间，网关序号,设备编号        
     comm_sn=comm_list[comm_index].serial_num
-    deviceno=onedata[7]
+    #deviceno=onedata[7]
     icommnum = int(comm_list[comm_index].commaddr)
     icontlnum = int(controller_list[dev_index].devaddr)
     sock=conn_list[conn_index].sock
@@ -662,6 +665,7 @@ def KLC_sendorder(dev_index,comm_index,conn_index,onedata):
     while True:
         try:
             if onedata[2] == 'AC-OPEN':
+                deviceno=onedata[7]
                 if onedata[3] != None and onedata[3] != 'NULL':
                     if int(onedata[3]) > 0 :
                         sleep(int(onedata[3]))
@@ -687,6 +691,7 @@ def KLC_sendorder(dev_index,comm_index,conn_index,onedata):
                         sendtimes=sendtimes+1
                              
             elif  onedata[2] == 'AC-CLOSE':
+                deviceno=onedata[7]
                 if onedata[3] != None and onedata[3] != 'NULL':
                     if int(onedata[3]) > 0:
                         sleep(int(onedata[3]))
@@ -712,44 +717,44 @@ def KLC_sendorder(dev_index,comm_index,conn_index,onedata):
                         sleep(60)
                         showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn+ ')'+ ' '+deviceno+' '+'CLOSE : '+ sendstr + ' failed times:' + str(sendtimes)
                         sendtimes=sendtimes+1            
-                elif onedata[2] == 'COLLECT-DATA':
-                    if conn_list[conn_index].isonline == 1:
-                        sendstr= '15 01 00 00 00 06 01'
-                        sendstr=sendstr+' '+ '03'
-                        sendstr=sendstr+' '+ '00 00' #起始地址
-                        sendstr=sendstr+' '+ '00 20' #数量
-                        #sendstr=sendstr+' '+ crc16(sendstr,0)
-                        sendstr=sendstr.replace(' ','')
-                        sendresult = sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
-                        if sendresult == None:
-                            showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn + ')'+' '+ deviceno+' Collect DATA: '+sendstr
-                            mymodule.create_log(showinfo)
-                            sleep(0.5)
-                            break
-                        else:
-                            sleep(60)
-                            showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn + ')'+' '+ deviceno+' Collect DATA: '+sendstr+ ' failed times:' + str(sendtimes)
-                            sendtimes=sendtimes+1
-                elif onedata[2] == 'GET-STATE': 
-                    if conn_list[conn_index].isonline == 1:
-                        sendstr= '15 01 00 00 00 06 02'
-                        sendstr=sendstr+' '+ '03'
-                        sendstr=sendstr+' '+ '00 00' #
-                        sendstr=sendstr+' '+ '00 04' #
-                        sendstr=sendstr+' '+ mymodule.crc16(sendstr,0)
-                        sendstr=sendstr.replace(' ','')
-                        sendresult = sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
-                        if sendresult == None:
-                            showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn + ')'+' '+ deviceno+' GET STATUS: '+sendstr
-                            mymodule.create_log(showinfo)
-                            sleep(0.5)
-                            break
-                        else:
-                            sleep(60)
-                            showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn + ')'+' '+ deviceno+' GET STATUS: '+sendstr+ ' failed times:' + str(sendtimes)
-                            sendtimes=sendtimes+1       
+            elif onedata[2] == 'COLLECT-DATA':
+                if conn_list[conn_index].isonline == 1:
+                    sendstr= '15 01 00 00 00 06 01'
+                    sendstr=sendstr+' '+ '03'
+                    sendstr=sendstr+' '+ '00 00' #起始地址
+                    sendstr=sendstr+' '+ '00 20' #数量
+                    #sendstr=sendstr+' '+ crc16(sendstr,0)
+                    sendstr=sendstr.replace(' ','')
+                    sendresult = sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
+                    if sendresult == None:
+                        showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn + ')'+' Collect DATA: '+sendstr
+                        mymodule.create_log(showinfo)
+                        sleep(0.5)
+                        break
+                    else:
+                        sleep(60)
+                        showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn + ')'+' Collect DATA: '+sendstr+ ' failed times:' + str(sendtimes)
+                        sendtimes=sendtimes+1
+            elif onedata[2] == 'GET-STATE': 
+                if conn_list[conn_index].isonline == 1:
+                    sendstr= '15 01 00 00 00 06 02'
+                    sendstr=sendstr+' '+ '03'
+                    sendstr=sendstr+' '+ '00 00' #
+                    sendstr=sendstr+' '+ '00 04' #
+                    sendstr=sendstr+' '+ mymodule.crc16(sendstr,0)
+                    sendstr=sendstr.replace(' ','')
+                    sendresult = sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
+                    if sendresult == None:
+                        showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn + ')'+' GET STATUS: '+sendstr
+                        mymodule.create_log(showinfo)
+                        sleep(0.5)
+                        break
+                    else:
+                        sleep(60)
+                        showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn + ')'+' GET STATUS: '+sendstr+ ' failed times:' + str(sendtimes)
+                        sendtimes=sendtimes+1       
             else:
-                showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn + ')'+' '+ deviceno+' unknow order : '+ onedata[2]
+                showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn + ')'+' unknow order : '+ onedata[2]
                 sendtimes=sendtimes+1
         except Exception as err:
             showinfo =mymodule.getcurrtime()+  ' KLC('+comm_sn + ') send order exception : '+str(err)
@@ -759,7 +764,7 @@ def KLC_sendorder(dev_index,comm_index,conn_index,onedata):
         if sendtimes > 5:
             conn_list[conn_index].isonline = 0
             mymodule.create_log(showinfo)
-            showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn + ')'+' '+ deviceno+' send thread shutdown for over 3 times '
+            showinfo=mymodule.getcurrtime()+' '+'KLC('+comm_sn + ')'+' send thread shutdown for over 3 times '
             mymodule.create_log(showinfo)
             break
     if dev_index >= 0:
@@ -869,8 +874,8 @@ def SFJ_handlerecv(comm_index,sdata):
                 for i in range(0,controlmax):
                     dev_index= find_devaddr(i+1,comm_sn,20)
                     if dev_index >=0:
-                        devid=dev_list[dev_index].devid
-                        sSQL = sSQL+"('"+str(devid[dev_index])+"','"+str(bState[i])+"'),"
+                        devid=controller_list[dev_index].devid
+                        sSQL = sSQL+"('"+str(devid)+"','"+str(bState[i])+"'),"
                 try:
                     if sSQL[-2:] =='),':
                         sSQL=sSQL[0:-1]+" ON DUPLICATE KEY UPDATE state = values(state);"    
@@ -1472,7 +1477,7 @@ def FKC_handlerecv(comm_index,sdata):
 def FKC_sendorder(dev_index,comm_index,conn_index,onedata):
     rResult=False
     comm_sn=comm_list[comm_index].serial_num
-    deviceno=onedata[7]
+    #deviceno=onedata[7]
     icommnum = int(comm_list[comm_index].commaddr)
     icontlnum = int(controller_list[dev_index].devaddr)
     sock=conn_list[conn_index].sock
@@ -1480,6 +1485,7 @@ def FKC_sendorder(dev_index,comm_index,conn_index,onedata):
     while True:
         try:
             if onedata[2] == 'AC-OPEN':
+                deviceno=onedata[7]
                 if onedata[3] != None and onedata[3] != 'NULL':
                     if int(onedata[3]) > 0:
                         sleep(int(onedata[3]))
@@ -1530,6 +1536,7 @@ def FKC_sendorder(dev_index,comm_index,conn_index,onedata):
                             sendtimes=sendtimes+1
                            
             elif  onedata[2] == 'AC-CLOSE':
+                deviceno=onedata[7]
                 if onedata[3] != None and onedata[3] != 'NULL':
                     if int(onedata[3]) > 0:
                         sleep(int(onedata[3]))
@@ -1580,6 +1587,7 @@ def FKC_sendorder(dev_index,comm_index,conn_index,onedata):
                             showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'CLOSE : '+sendstr+ ' faile times:' + str(sendtimes)
                             sendtimes=sendtimes+1
             elif  onedata[2] == 'AC-STOP':
+                deviceno=onedata[7]
                 if onedata[3] != None and onedata[3] != 'NULL':
                     if int(onedata[3]) > 0:
                         sleep(int(onedata[32]))
@@ -1630,42 +1638,42 @@ def FKC_sendorder(dev_index,comm_index,conn_index,onedata):
                             showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'STOP : '+sendstr+ ' faile times:' + str(sendtimes)
                             sendtimes=sendtimes+1
             elif onedata[2] == 'COLLECT-DATA':
-                    if conn_list[conn_index].isonline == 1:
-                        sendstr= ('00'+hex(int(comm_list[comm_index].commaddr)).replace('0x',''))[-2:]
-                        sendstr=sendstr+' '+ '03'
-                        sendstr=sendstr+' '+ '00 00' #起始地址
-                        sendstr=sendstr+' '+ '00 10' #数量
-                        sendstr=sendstr+' '+ mymodule.crc16(sendstr,0)
-                        sendstr=sendstr.replace(' ','')
-                        sendresult = sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
-                        if sendresult == None:
-                            showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn + ')'+' '+ deviceno+' Collect DATA: '+sendstr
-                            mymodule.create_log(showinfo)
-                            sleep(0.5)
-                            break
-                        else:
-                            sleep(60)
-                            showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn + ')'+' '+ deviceno+' Collect DATA: '+sendstr+ ' failed times:' + str(sendtimes)
-                            sendtimes=sendtimes+1
-            elif onedata[2] == 'GET-STATE': 
                 if conn_list[conn_index].isonline == 1:
-                    sendstr='00 70 00 54'
+                    sendstr= ('00'+hex(int(comm_list[comm_index].commaddr)).replace('0x',''))[-2:]
+                    sendstr=sendstr+' '+ '03'
+                    sendstr=sendstr+' '+ '00 00' #起始地址
+                    sendstr=sendstr+' '+ '00 10' #数量
+                    sendstr=sendstr+' '+ mymodule.crc16(sendstr,0)
+                    sendstr=sendstr.replace(' ','')
                     sendresult = sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
                     if sendresult == None:
-                        showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn + ')'+' '+ deviceno+' GET STATUS: '+sendstr
+                        showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn + ')'+' Collect DATA: '+sendstr
                         mymodule.create_log(showinfo)
                         sleep(0.5)
                         break
                     else:
                         sleep(60)
-                        showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn + ')'+' '+ deviceno+' GET STATUS: '+sendstr+ ' failed times:' + str(sendtimes)
+                        showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn + ')'+' '+ deviceno+' Collect DATA: '+sendstr+ ' failed times:' + str(sendtimes)
+                        sendtimes=sendtimes+1
+            elif onedata[2] == 'GET-STATE': 
+                if conn_list[conn_index].isonline == 1:
+                    sendstr='00 70 00 54'
+                    sendresult = sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
+                    if sendresult == None:
+                        showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn + ')'+' GET STATUS: '+sendstr
+                        mymodule.create_log(showinfo)
+                        sleep(0.5)
+                        break
+                    else:
+                        sleep(60)
+                        showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn + ')'+' GET STATUS: '+sendstr+ ' failed times:' + str(sendtimes)
                         sendtimes=sendtimes+1       
             elif  onedata[2] == 'INTERVAL':
                 if onedata[3] != None and onedata[3] != 'NULL': 
                     if int(onedata[3]) > 0:
                         sleep(int(onedata[3]))
                 if conn_list[conn_index].isonline == 1:        
-                    showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+ ' '+deviceno+' '+'SET STATUS : '+str(onedata[4])
+                    showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn+ ')'+' '+'SET STATUS : '+str(onedata[4])
                     mymodule.create_log(showinfo)
         except Exception as err:
             showinfo =mymodule.getcurrtime()+' '+ 'FKC('+comm_sn + ') send order failture : '+str(err)
@@ -1675,7 +1683,7 @@ def FKC_sendorder(dev_index,comm_index,conn_index,onedata):
         if sendtimes > 5:
             conn_list[conn_index].isonline = 0
             mymodule.create_log(showinfo)
-            showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn + ')'+' '+ deviceno+' shutdown for send over 3 times '
+            showinfo=mymodule.getcurrtime()+' '+'FKC('+comm_sn + ')'+' shutdown for send over 3 times '
             mymodule.create_log(showinfo)
             break
     if dev_index >= 0:
@@ -2031,19 +2039,19 @@ def collect_data(comm_index):
                 pass
             elif commtype=='FKC':
                 #采集任务信息
-                collect_thread==myThread(target=FKC_sendorder,args=(-1,comm_index,conn_index,[0,0,"COLLECT-DATA"]))
+                collect_thread=myThread(target=FKC_sendorder,args=(-1,comm_index,conn_index,[0,0,"COLLECT-DATA"]))
                 collect_thread.start()
 
             elif commtype=='XPC':
-                collect_thread==myThread(target=XPC_sendorder,args=(-1,comm_index,conn_index,[0,0,"COLLECT-DATA"]))
+                collect_thread=myThread(target=XPC_sendorder,args=(-1,comm_index,conn_index,[0,0,"COLLECT-DATA"]))
                 collect_thread.start()
 
             elif commtype=='KLC':
-                collect_thread==myThread(target=KLC_sendorder,args=(-1,comm_index,conn_index,[0,0,"COLLECT-DATA"]))
+                collect_thread=myThread(target=KLC_sendorder,args=(-1,comm_index,conn_index,[0,0,"COLLECT-DATA"]))
                 collect_thread.start()
 
             elif commtype=='YYC':
-                collect_thread==myThread(target=YYC_sendorder,args=(-1,comm_index,conn_index,[0,0,"COLLECT-DATA"]))
+                collect_thread=myThread(target=YYC_sendorder,args=(-1,comm_index,conn_index,[0,0,"COLLECT-DATA"]))
                 collect_thread.start()
 
             elif commtype=='PLC':
@@ -2076,14 +2084,14 @@ def get_state(comm_index):
             if commtype=='SFJ-0804' or commtype=='SFJ-1200':
                 pass
             elif commtype=='FKC': 
-                getstate_thread==myThread(target=FKC_sendorder,args=(-1,comm_index,conn_index,[0,0,"GET-STATE"]))
+                getstate_thread=myThread(target=FKC_sendorder,args=(-1,comm_index,conn_index,[0,0,"GET-STATE"]))
                 getstate_thread.start()
                 '''
                 sendstr='00 70 00 54'
                 sendresult=sock.sendall(bytes().fromhex(sendstr.replace(' ','')))
                 '''
             elif commtype=='KLC':
-                getstate_thread==myThread(target=KLC_sendorder,args=(-1,comm_index,conn_index,[0,0,"GET-STATE"]))
+                getstate_thread=myThread(target=KLC_sendorder,args=(-1,comm_index,conn_index,[0,0,"GET-STATE"]))
                 getstate_thread.start()
                 '''
                 sendstr= '15 01 00 00 00 06 02'
@@ -2353,7 +2361,7 @@ def recv_link(sock,addr):
     comm_sn=''
     illegaltimes = 0
     sendtimes = 0
-    handle_data_scheduler=[]
+    handle_data_scheduler=BackgroundScheduler()
     existcontroller = 0
     existsensor = 0
     while True:
@@ -2460,7 +2468,7 @@ def recv_link(sock,addr):
                         illegaltimes= illegaltimes + 1
                         showinfo =mymodule.getcurrtime() + ' receive client (' + comm_sn + ')' +' error connect data: ' + sdata +' ' + str(illegaltimes) +' times.'                 
                         mymodule.create_log(showinfo)
-                        commtype = comm_list[comm_index].commtype
+                    commtype = comm_list[comm_index].commtype
                     if comm_list[comm_index].sensormax != None and  comm_list[comm_index].sensormax != 'NULL':
                         existsensor=1
                     if comm_list[comm_index].controlmax != None and  comm_list[comm_index].controlmax != 'NULL':    
@@ -2781,12 +2789,12 @@ def DYJ_send_thread():
            
 #本模块运行，导入到其他模块不执行
 if __name__ == '__main__':
+
     t1 = myThread(target=createGUI, args=(), name='gui')
     t1.setDaemon(True) 
     t1.start() 
     connect_sockserver()
     get_devinfo() 
-
     t2 = myThread(target=handle_request, args=(), name='handle_request') 
     t2.setDaemon(True)
     t2.start() 
