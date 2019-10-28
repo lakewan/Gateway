@@ -2485,7 +2485,8 @@ def recv_link(sock,addr):
                         handle_data_scheduler.start()
     #异常数据,是否需要退出
         except Exception as e:
-            pass
+            showinfo=mymodule.getcurrtime() + ' receive data exception:'+str(e)
+            mymodule.create_log(showinfo)
     if existsensor:
         handle_data_scheduler.remove_job('sensor'+comm_sn)
     elif existcontroller:
@@ -2493,7 +2494,7 @@ def recv_link(sock,addr):
     conn_index=find_conn_sn(comm_sn)
     if conn_index >=0:
         conn_list[conn_index].isonline = 0
-    sleep(2)
+    sleep(3)
     close_sock(sock,addr,comm_sn)
 
 
@@ -2575,13 +2576,13 @@ def IOT_send_thread():
             sSQL=sSQL+'LEFT JOIN yw_d_controller_tbl b ON a.Device_ID = b.ID '
             sSQL=sSQL+'LEFT JOIN yw_d_commnication_tbl c ON b.Commucation_ID = c.ID '
             sSQL=sSQL+'where (a.ActOrder = "AC-OPEN" OR a.ActOrder = "AC-CLOSE" OR a.ActOrder = "AC-STOP") AND a.`ExecuteResult` < 4 '
-            sSQL=sSQL+'AND (ISNULL(a.ScheduledTime) OR (NOW() > a.ScheduledTime AND DATE_ADD(a.ScheduledTime,INTERVAL 10 MINUTE))) AND (c.SerialNumber IS NOT NULL)'
+            sSQL=sSQL+'AND (ISNULL(a.ScheduledTime) OR (NOW() > a.ScheduledTime AND DATE_ADD(a.ScheduledTime,INTERVAL 10 MINUTE)>NOW())) AND (c.SerialNumber IS NOT NULL) '
             sSQL=sSQL+'UNION ALL '
             sSQL=sSQL+'SELECT a.id,a.Device_ID,a.ActOrder,a.actparam,a.scheduledtime,a.createtime,b.serialNumber,b.code  '
             sSQL=sSQL+'FROM yw_c_control_log_tbl a  '
             sSQL=sSQL+'LEFT JOIN yw_d_commnication_tbl b ON a.Device_ID = b.ID  '
             sSQL=sSQL+'where (a.ActOrder = "INTERVAL" OR a.ActOrder = "GETDATA") AND a.`ExecuteResult` < 4  '
-            sSQL=sSQL+'AND (ISNULL(a.ScheduledTime) OR (NOW() > a.ScheduledTime AND DATE_ADD(a.ScheduledTime,INTERVAL 10 MINUTE))) AND (b.SerialNumber IS NOT NULL) '
+            sSQL=sSQL+'AND (ISNULL(a.ScheduledTime) OR (NOW() > a.ScheduledTime AND DATE_ADD(a.ScheduledTime,INTERVAL 10 MINUTE)>NOW())) AND (b.SerialNumber IS NOT NULL) '
             sendconn=mysqlpool.connection()
             sendcursor=sendconn.cursor()
             sendcursor.execute(sSQL,args=())
@@ -2672,7 +2673,7 @@ def SFJ_send_thread():
             #指令任务id,设备id，指令名称，设备地址，预计时间，下发时间，网关序号,设备地址  
             sSQL='SELECT a.ID, a.Device_ID,ActOrder,b.Device_Address,a.ScheduledTime,a.CreateTime,c.PLC_Number,c.PLC_Address FROM sfyth_control_log a '
             sSQL= sSQL+'LEFT JOIN sfyth_device b ON a.Device_ID = b.ID  LEFT JOIN sfyth_plc c ON a.PLC_Number = c.PLC_Number '
-            sSQL= sSQL+'WHERE a.ActState = 0 AND (ISNULL(a.ScheduledTime) OR (NOW() > a.ScheduledTime AND DATE_ADD(a.ScheduledTime,INTERVAL 10 MINUTE))) '
+            sSQL= sSQL+'WHERE a.ActState = 0 AND (ISNULL(a.ScheduledTime) OR (NOW() > a.ScheduledTime AND DATE_ADD(a.ScheduledTime,INTERVAL 10 MINUTE)>NOW())) '
             sendconn=mysqlpool.connection()
             sendcursor=sendconn.cursor()
             sendcursor.execute(sSQL)
@@ -2715,7 +2716,7 @@ def SFJ_send_thread():
             sSQL= sSQL+ 'b.PLC_Address,a.T_ID,b.PLC_Number FROM  sfyth_task a '
             sSQL= sSQL+ 'LEFT JOIN sfyth_plc b ON b.PLC_Number = a.PLC_Number '
             sSQL= sSQL+ 'WHERE a.T_State=0 AND (ISNULL(a.T_Start) OR (NOW() > a.T_Start AND  ' 
-            sSQL= sSQL+ 'DATE_ADD(DATE_FORMAT(CONCAT(a.T_Date," ",a.T_Start),"%Y-%m-%d %H:%i:%s"),INTERVAL 30 MINUTE)>NOW())) '
+            sSQL= sSQL+ 'DATE_ADD(DATE_FORMAT(CONCAT(a.T_Date," ",a.T_Start),"%Y-%m-%d %H:%i:%s"),INTERVAL 10 MINUTE)>NOW())) '
             sSQL= sSQL+ 'ORDER BY a.T_ID ASC'
             sendconn=mysqlpool.connection()
             sendcursor=sendconn.cursor()
@@ -2764,7 +2765,7 @@ def DYJ_send_thread():
             #任务ID，发送日期，设置时长，设置浓度，预计时间，通讯设备序列号，通讯地址
             sSQL='SELECT a.ID,a.SendDate,SetInterval,SetDensity,ScheduledTime,b.SerialNumber,b.CodeAddress FROM  yw_g_taskorder_tbl a '
             sSQL=sSQL+'LEFT JOIN yw_d_commnication_tbl b ON a.`Commucation_ID` = b.ID '
-            sSQL=sSQL+'WHERE (ExecuteResult=0 OR ISNULL(ExecuteResult)) AND (ISNULL(ScheduledTime) OR (NOW() > sendDate AND DATE_ADD(sendDate,INTERVAL 30 MINUTE)>NOW())) '        
+            sSQL=sSQL+'WHERE (ExecuteResult=0 OR ISNULL(ExecuteResult)) AND (ISNULL(ScheduledTime) OR (NOW() > sendDate AND DATE_ADD(sendDate,INTERVAL 10 MINUTE)>NOW())) '        
             sSQL=sSQL+'ORDER BY a.ID ASC '
             sendconn=mysqlpool.connection()
             sendcursor=sendconn.cursor()
