@@ -1,3 +1,14 @@
+
+var COMMAND_REPORT = 0x00; //属性上报
+var COMMAND_SET = 0x01; //属性设置
+var COMMAND_REPORT_REPLY = 0x02; //上报数据返回结果
+var COMMAND_SET_REPLY = 0x03; //属性设置设备返回结果
+var COMMAD_UNKOWN = 0xff;    //未知的命令
+var ALINK_PROP_REPORT_METHOD = 'thing.event.property.post'; //物联网平台Topic， 设备上传属性数据到云端
+var ALINK_PROP_SET_METHOD = 'thing.service.property.set'; //物联网平台Topic， 云端下发属性控制指令到设备端
+var ALINK_PROP_SET_REPLY_METHOD = 'thing.service.property.set'; //物联网平台Topic, 设备上报属性设置的结果到云端
+
+
 var COMMAND_REPORT = 0x00; //属性上报
 var COMMAND_SET = 0x01; //属性设置
 var COMMAND_REPORT_REPLY = 0x02; //上报数据返回结果
@@ -27,96 +38,96 @@ function rawDataToProtocol(bytes) {
     }
     //视图是一个可以从 ArrayBuffer 对象中读写多种数值类型的底层接口，使用它时，不用考虑不同平台的字节序问题。
     var dataView = new DataView(uint8Array.buffer, 0);
-    var jsonMap = new Object();
+    var jsonMap = {};
     var fHead = uint8Array[0]; // command
+   
     if (fHead == COMMAND_REPORT) {
-    	if (uint8Array[15] == 15){ //获取状态
+    	if (uint8Array[14] == 15){ //获取状态
+    		
     		//0000201909040003020f0c500010028d12d3dd,1\3\4\8\10\13打开
-    		var tempa = ("00000000"+uint8Array(17).toString(2)).slice(-8,)+("00000000"+uint8Array(16).toString(2)).slice(-8,)
-    		var devstate= tempa.split('').reverse().join('')
+    		var tempa = ("00000000"+uint8Array[21].toString(2)).slice(-8)+("00000000"+uint8Array[20].toString(2)).slice(-8);
+    		var devstate= tempa.split('').reverse().join('');
 	        jsonMap["method"] = ALINK_PROP_REPORT_METHOD; //ALink JSON格式 - 属性上报topic
-	        jsonMap["version"] = "1.1"; //ALink JSON格式 - 协议版本号固定字段
+	        jsonMap["version"] = "1.0"; //ALink JSON格式 - 协议版本号固定字段
 	        jsonMap["id"] = "" + dataView.getInt32(1); //ALink JSON格式 - 标示该次请求id值
 	        var params = {};
-	        params["area1"] = parseInt(devstate.slice(0)); //对应产品属性中area1
-	        params["area2"] = parseInt(devstate.slice(1)); //对应产品属性中area2       
-	        params["area3"] = parseInt(devstate.slice(2)); //对应产品属性中area3
-	        params["area4"] = parseInt(devstate.slice(3)); //对应产品属性中area4
-	        params["area5"] = parseInt(devstate.slice(4)); //对应产品属性中area5
-	        params["area6"] = parseInt(devstate.slice(5)); //对应产品属性中area6
-	        params["area7"] = parseInt(devstate.slice(6)); //对应产品属性中area7
-	        params["area8"] = parseInt(devstate.slice(7)); //对应产品属性中area8
-	        params["area9"] = parseInt(devstate.slice(8)); //对应产品属性中area9
-	        params["area10"] = parseInt(devstate.slice(9)); //对应产品属性中area10       
-	        params["area11"] = parseInt(devstate.slice(10)); //对应产品属性中area11
-	        params["area12"] = parseInt(devstate.slice(11)); //对应产品属性中area12
-	        params["fertbump"] = parseInt(devstate.slice(12)); //对应产品属性中fertbump
-	        params["fertvalve"] = parseInt(devstate.slice(13)); //对应产品属性中fertvalve
-	        params["cleanvalve"] = parseInt(devstate.slice(14)); //对应产品属性中cleanvalve
-	        params["alarmer"] = parseInt(devstate.slice(15)); //对应产品属性中alarmer
+	        params["area1"] = parseInt(devstate.slice(0,1)); //对应产品属性中area1
+	        params["area2"] = parseInt(devstate.slice(1,2)); //对应产品属性中area2       
+	        params["area3"] = parseInt(devstate.slice(2,3)); //对应产品属性中area3
+	        params["area4"] = parseInt(devstate.slice(3,4)); //对应产品属性中area4
+	        params["area5"] = parseInt(devstate.slice(4,5)); //对应产品属性中area5
+	        params["area6"] = parseInt(devstate.slice(5,6)); //对应产品属性中area6
+	        params["area7"] = parseInt(devstate.slice(6,7)); //对应产品属性中area7
+	        params["area8"] = parseInt(devstate.slice(7,8)); //对应产品属性中area8
+	        params["area9"] = parseInt(devstate.slice(8,9)); //对应产品属性中area9
+	        params["area10"] = parseInt(devstate.slice(9,10)); //对应产品属性中area10       
+	        params["area11"] = parseInt(devstate.slice(10,11)); //对应产品属性中area11
+	        params["area12"] = parseInt(devstate.slice(11,12)); //对应产品属性中area12
+	        params["fertbump"] = parseInt(devstate.slice(12,13)); //对应产品属性中fertbump
+	        params["fertvalve"] = parseInt(devstate.slice(13,14)); //对应产品属性中fertvalve
+	        params["cleanvalve"] = parseInt(devstate.slice(14,15)); //对应产品属性中cleanvalve
+	        params["alarmer"] = parseInt(devstate.slice(15,16)); //对应产品属性中alarmer
 	        jsonMap["params"] = params; //ALink JSON格式 - params标准字段
 	        }
-	    else if (uint8Array[15] == 16){ //任务上传
+	    else if(uint8Array[14] == 16){ //任务上传
     		//0000201909040003021000000020400000043200020000000500000000000000000000000000000000000000000000000007e3000a001d0015001e000b07e3000a001d0015001e00100000000500004b54
     		//2019-10-29 21:30:11 21:30:16 灌溉 2/5/6/11灌区，计划时长5，实际时长5，状态：已完成
-    		var remote_attr = dataView.getInt16(16)
-    		var tempa = ("00000000"+uint8Array(18).toString(2)).slice(-8,)+("00000000"+uint8Array(19).toString(2)).slice(-8,)
-    		var devstate= tempa.split('').reverse().join('')
+    		var remote_attr = dataView.getInt16[20]
+    		tempa = ("00000000"+uint8Array[22].toString(2)).slice(-8)+("00000000"+uint8Array[23].toString(2)).slice(-8)
+    		devstate= tempa.split('').reverse().join('')
 	        jsonMap["method"] = ALINK_PROP_REPORT_METHOD; //ALink JSON格式 - 属性上报topic
 	        jsonMap["version"] = "1.1"; //ALink JSON格式 - 协议版本号固定字段
 	        jsonMap["id"] = "" + dataView.getInt32(1); //ALink JSON格式 - 标示该次请求id值
-	        var params = {};
-	        params["area1"] = parseInt(devstate.slice(0)); //对应产品属性中area1
-	        params["area2"] = parseInt(devstate.slice(1)); //对应产品属性中area2       
-	        params["area3"] = parseInt(devstate.slice(2)); //对应产品属性中area3
-	        params["area4"] = parseInt(devstate.slice(3)); //对应产品属性中area4
-	        params["area5"] = parseInt(devstate.slice(4)); //对应产品属性中area5
-	        params["area6"] = parseInt(devstate.slice(5)); //对应产品属性中area6
-	        params["area7"] = parseInt(devstate.slice(6)); //对应产品属性中area7
-	        params["area8"] = parseInt(devstate.slice(7)); //对应产品属性中area8
-	        params["area9"] = parseInt(devstate.slice(8)); //对应产品属性中area9
-	        params["area10"] = parseInt(devstate.slice(9)); //对应产品属性中area10       
-	        params["area11"] = parseInt(devstate.slice(10)); //对应产品属性中area11
-	        params["area12"] = parseInt(devstate.slice(11)); //对应产品属性中area12
-	        params["fertbump"] = parseInt(devstate.slice(12)); //对应产品属性中fertbump
-	        params["fertvalve"] = parseInt(devstate.slice(13)); //对应产品属性中fertvalve
-	        params["cleanvalve"] = parseInt(devstate.slice(14)); //对应产品属性中cleanvalve
-	        params["alarmer"] = parseInt(devstate.slice(15)); //对应产品属性中alarmer
+	        params = {};
+	        i = 0;
+	        var areasel="";
+			for (i=0;i<12;i++) {
+				if (devstate.slice(i,i+1) == 1){
+					areasel=areasel+String(i+1)+",";
+					}
+			}
+			if (areasel.slice(-1) == ","){
+				areasel=areasel.slice(0,-1);
+				}
+			else{
+				areasel=areasel;
+				}
+		    params["task_area"] = areasel; //对应产品属性中area12
+			params["task_state"] = dataView.getInt16(24)
+	        params["schedule_irrigate_num"] = dataView.getInt16(26)/10
+	        params["schedule_irrigate_interval"] = dataView.getInt16(28)
+	        params["schedule_fertilize_num"] = dataView.getInt16(30)/10
 	        
-	        params["task_state"] = dataView.getInt16(20)
-	        params["schedule_irrigate_num"] = dataView.getInt16(22)
-	        params["schedule_irrigate_interval"] = dataView.getInt16(24)
-	        params["schedule_fertilize_num"] = dataView.getInt16(26)
-	        params["start_year"] = String(dataView.getInt16(50)) 
-	        params["start_month"] = String(dataView.getInt16(52)) 
-	        params["start_day"] = String(dataView.getInt16(54))
-	        params["start_hour"] = String(dataView.getInt16(56)) 
-	        params["start_minute"] = String(dataView.getInt16(58)) 
-	        params["start_second"] = String(dataView.getInt16(60))
-			params["end_year"] = String(dataView.getInt16(62)) 
-	        params["end_month"] = String(dataView.getInt16(64)) 
-	        params["end_day"] = String(dataView.getInt16(66))
-	        params["end_hour"] = String(dataView.getInt16(68)) 
-	        params["end_minute"] = String(dataView.getInt16(70)) 
-	        params["end_second"] = String(dataView.getInt16(72))	        
-	        
-	        
-	        params["waterreal"] = dataView.getInt16(74)
-	        params["intervalreal"] = dataView.getInt16(76)
-	        params["fertreal"] = dataView.getInt16(78)
-	        
+	        params["task_type"] = dataView.getInt16(44)   	//0-灌溉，1-施肥
+	        params["irrigate_mode"] = dataView.getInt16(46) //0-定量，1-定时
+	        params["preirrigate"] = dataView.getInt16(48)	//0-无预灌溉，1-有预灌溉
+	        params["clean_attr"] = dataView.getInt16(50)	//0-无清洁，1-有清洁
+
+	        params["start_year"] = dataView.getInt16(54) 
+	        params["start_month"] = dataView.getInt16(56) 
+	        params["start_day"] = dataView.getInt16(58)
+	        params["start_hour"] = dataView.getInt16(60) 
+	        params["start_minute"] =dataView.getInt16(62) 
+	        params["start_second"] = dataView.getInt16(64)
+			params["end_year"] = dataView.getInt16(66) 
+	        params["end_month"] = dataView.getInt16(68) 
+	        params["end_day"] =dataView.getInt16(70)
+	        params["end_hour"] = dataView.getInt16(72) 
+	        params["end_minute"] = dataView.getInt16(74) 
+	        params["end_second"] = dataView.getInt16(76)	        
+	        params["real_irrigate_num"] = dataView.getInt16(78)/10
+	        params["real_irrigate_interval"] = dataView.getInt16(80)
+	        params["real_fertilize_num"] = dataView.getInt16(82)/10
 	        jsonMap["params"] = params; //ALink JSON格式 - params标准字段
 	        }
-	        
-	        
-	        
-    } else if(fHead == COMMAND_SET_REPLY) {
+    } 
+	else if(fHead == COMMAND_SET_REPLY) {
         jsonMap['version'] = '1.0'; //ALink JSON格式 - 协议版本号固定字段
         jsonMap['id'] = '' + dataView.getInt32(1); //ALink JSON格式 - 标示该次请求id值
         jsonMap['code'] = ''+ dataView.getUint8(5);
         jsonMap['data'] = {};
     }
-
+    
     return jsonMap;
 }
 /*
@@ -133,24 +144,77 @@ function rawDataToProtocol(bytes) {
 输出结果 ->
     0x0200003039c8
 */
-function protocolToRawData(json) {
-    var method = json['method'];
-    var id = json['id'];
-    var version = json['version'];
-    var payloadArray = [];
+function protocolToRawData(json) 
+{
+    var method = json["method"];
+    var id = json["id"];
+    var version = json["version"];
+    var payloadArray = "";
     if (method == ALINK_PROP_SET_METHOD) // 属性设置
-    {
-        var params = json['params'];
-        var prop_float = params['prop_float'];
-        var prop_int16 = params['prop_int16'];
-        var prop_bool = params['prop_bool'];
-        //按照自定义协议格式拼接 rawData
-        payloadArray = payloadArray.concat(buffer_uint8(COMMAND_SET)); // command字段
-        payloadArray = payloadArray.concat(buffer_int32(parseInt(id))); // ALink JSON格式 'id'
-        payloadArray = payloadArray.concat(buffer_int16(prop_int16)); // 属性'prop_int16'的值
-        payloadArray = payloadArray.concat(buffer_uint8(prop_bool)); // 属性'prop_bool'的值
-        payloadArray = payloadArray.concat(buffer_float32(prop_float)); // 属性'prop_float'的值
-    } else if (method ==  ALINK_PROP_REPORT_METHOD) { //设备上报数据返回结果
+    {	
+
+        var params = json["params"];
+        var send_order = params["send_order"];
+    	var comm_serial = params["comm_serial"];
+    	var comm_addr = ("00"+(params["comm_addr"]).toString(16)).slice(-2);
+    	var orderstr=""
+    	if (send_order == 1)
+    		{  //下发开指令
+    		 var dev_addr = ("0000"+(params["dev_addr"]).toString(16)).slice(-4);
+    		 payloadArray = comm_serial;
+    		 orderstr= comm_addr +"05" + dev_addr + "FF00"
+    		 payloadArray = payloadArray + orderstr + ToModbusCRC16(orderstr);
+    		}
+    	else if (send_order == 2)
+    		{  //下发关指令
+    		var dev_addr = ("0000"+(params["dev_addr"]).toString(16)).slice(-4);
+    		payloadArray = comm_serial;
+   		 	orderstr= comm_addr +"05" + dev_addr + "0000"
+   		 	payloadArray = payloadArray + orderstr + ToModbusCRC16(orderstr);
+	   		}
+    	
+    	else if (send_order == 10)
+    		{  //下发任务
+			 payloadArray = payloadArray.concat(comm_serial);
+			 orderstr = orderstr + comm_addr;
+			 orderstr = orderstr + "100129000D1A"; //10-指令，0129-起始地址（40298-1），寄存器数量-000D，字节数-1A
+			 orderstr = orderstr + "0001";			//远程指令
+			 var areaarray = new Array();
+			 areaarray = params["task_area"].split(",");
+			 var taskarea="";
+			 var waternum = params["schedule_irrigate_num"];
+			 var waterinterval = params["schedule_irrigate_interval"];
+			 var fertnum = params["schedule_fertilize_num"];
+			 var task_type = params["schedule_fertilize_num"];
+			 
+      		 for (i=0;16;i++)
+	      		 {
+      			 if ((i+1) in areaarray )
+      			 	{
+      				 	taskarea = "1" + taskarea;
+      				 	continue;
+      			 	}
+      			 else
+      			 	{
+      				 	taskarea = "0" + taskarea;
+      			 	}
+	      		 }
+      		 
+      		orderstr = orderstr + ("0000"+parseInt(taskarea,2).toString(16)).slice(-4);	//灌区
+      		orderstr = orderstr + "0000";	//状态
+      		
+      		orderstr = orderstr + ("0000"+parseInt(waternum).toString(16)).slice(-4);	//灌溉设定量
+      		orderstr = orderstr + ("0000"+parseInt(waterinterval).toString(16)).slice(-4);	//灌溉设定时长
+      		console.log("waterinterva:"+String(waterinterval));
+      		console.log(orderstr);
+      		orderstr = orderstr + ("0000"+parseInt(fertnum).toString(16)).slice(-4);	//施肥量
+      		console.log("fertnum:"+String(fertnum));
+      		orderstr = orderstr + "000000000000000000000000";	//设定日期
+      		orderstr = orderstr + ("0000"+parseInt(task_type).toString(16)).slice(-4);	//任务类型
+      		payloadArray = payloadArray + orderstr + ToModbusCRC16(orderstr);	//CRC验证
+      		}
+    	} 
+    else if (method ==  ALINK_PROP_REPORT_METHOD) { //设备上报数据返回结果
         var code = json['code'];
         payloadArray = payloadArray.concat(buffer_uint8(COMMAND_REPORT_REPLY)); //command字段
         payloadArray = payloadArray.concat(buffer_int32(parseInt(id))); // ALink JSON格式 'id'
@@ -161,6 +225,7 @@ function protocolToRawData(json) {
         payloadArray = payloadArray.concat(buffer_int32(parseInt(id))); // ALink JSON格式 'id'
         payloadArray = payloadArray.concat(buffer_uint8(code));
     }
+    
     return payloadArray;
 }
 //以下是部分辅助函数
@@ -195,3 +260,110 @@ function buffer_byte(value) {
     dv.setFloat32(0, value);
     return [].slice.call(uint8Array);
 }
+
+var CRC = {};
+function CRC16(data) {
+    var len = data.length;
+    if (len > 0) {
+        var crc = 0xFFFF;
+
+        for (var i = 0; i < len; i++) {
+            crc = (crc ^ (data[i]));
+            for (var j = 0; j < 8; j++) {
+                crc = (crc & 1) != 0 ? ((crc >> 1) ^ 0xA001) : (crc >> 1);
+            }
+        }
+        var hi = ((crc & 0xFF00) >> 8);  //高位置
+        var lo = (crc & 0x00FF);         //低位置
+
+        return [hi, lo];
+    }
+    return [0, 0];
+};
+
+function isArray(arr) {
+    return Object.prototype.toString.call(arr) === '[object Array]';
+};
+
+function ToCRC16 (str, isReverse) {
+    return toString(CRC16(isArray(str) ? str : strToByte(str)), isReverse);
+};
+
+function ToModbusCRC16(str, isReverse) {
+    return toString(CRC16(isArray(str) ? str : strToHex(str)), isReverse);
+};
+
+function strToByte(str) {
+    var tmp = str.split(''), arr = [];
+    for (var i = 0, c = tmp.length; i < c; i++) {
+        var j = encodeURI(tmp[i]);
+        if (j.length == 1) {
+            arr.push(j.charCodeAt());
+        } else {
+            var b = j.split('%');
+            for (var m = 1; m < b.length; m++) {
+                arr.push(parseInt('0x' + b[m]));
+            }
+        }
+    }
+    return arr;
+};
+
+function convertChinese(str) {
+    var tmp = str.split(''), arr = [];
+    for (var i = 0, c = tmp.length; i < c; i++) {
+        var s = tmp[i].charCodeAt();
+        if (s <= 0 || s >= 127) {
+            arr.push(s.toString(16));
+        }
+        else {
+            arr.push(tmp[i]);
+        }
+    }
+    return arr;
+};
+
+function filterChinese(str) {
+    var tmp = str.split(''), arr = [];
+    for (var i = 0, c = tmp.length; i < c; i++) {
+        var s = tmp[i].charCodeAt();
+        if (s > 0 && s < 127) {
+            arr.push(tmp[i]);
+        }
+    }
+    return arr;
+};
+
+function strToHex(hex, isFilterChinese) {
+    hex = isFilterChinese ? filterChinese(hex).join('') : convertChinese(hex).join('');
+
+    //清除所有空格
+    hex = hex.replace(/\s/g, "");
+    //若字符个数为奇数，补一个0
+    hex += hex.length % 2 != 0 ? "0" : "";
+
+    var c = hex.length / 2, arr = [];
+    for (var i = 0; i < c; i++) {
+        arr.push(parseInt(hex.substr(i * 2, 2), 16));
+    }
+    return arr;
+};
+
+function padLeft(s, w, pc) {
+    if (pc == undefined) {
+        pc = '0';
+    }
+    for (var i = 0, c = w - s.length; i < c; i++) {
+        s = pc + s;
+    }
+    return s;
+};
+
+function toString(arr, isReverse) {
+    if (typeof isReverse == 'undefined') {
+        isReverse = true;
+    }
+    var hi = arr[0], lo = arr[1];
+    return padLeft((isReverse ? hi + lo * 0x100 : hi * 0x100 + lo).toString(16).toUpperCase(), 4, '0');
+};
+
