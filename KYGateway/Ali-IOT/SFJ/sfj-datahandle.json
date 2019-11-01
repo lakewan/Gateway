@@ -1,3 +1,19 @@
+
+//1、通讯设备的序列号无意义；2、控制设备ID无意义，灌区和施肥通道换成通道号而不是设备ID；
+
+var setString=new String('{"method":"thing.service.property.set","version":"1.0","id": "2241348","params":{"comm_serial": "0000201909040003","comm_addr":2,"task_area":"1,6,7,13,15","task_state":0,"schedule_irrigate_num":0,"schedule_irrigate_interval":5,"schedule_fertilize_num":0,"task_type": 0,"send_order":10}}');
+
+//var setString=new String('{"method":"thing.service.property.set","version":"1.0","id": "2241348","params":{"comm_serial": "0000201909040003","comm_addr":2,"dev_addr":1,"send_order":1}}');
+
+// var setString = Buffer("00002233440000201909040003020f0c500010028d12d3dd","hex");
+//1\3\4\8\10\13打开
+//var rawdata_report_prop = Buffer("00002233440000201909040003021000000020400000043200020000000500000000000000000000000000000000000000000000000007e3000a001d0015001e000b07e3000a001d0015001e00100000000500004b54","hex")
+//2019-10-29 21:30:11 21:30:16 灌溉 2/5/6/11灌区，计划时长5，实际时长5，状态：已完成
+function Test()
+{
+    //rawDataToProtocol(rawdata_report_prop);
+    protocolToRawData(JSON.parse(setString));
+}
 var COMMAND_REPORT = 0x00;
 var COMMAND_SET = 0x01; 
 var COMMAND_REPORT_REPLY = 0x02; 
@@ -257,7 +273,7 @@ function protocolToRawData(json)
         var send_order = params.send_order;
     	var commaddr = params.comm_addr;
      	var devaddr=0;
-        var commnum= params.comm_serial;     	
+     	var commnum= params.comm_serial;     	
      	payloadArray = payloadArray.concat(buffer_uint32(parseInt(commnum.slice(0,8),16)));
      	payloadArray = payloadArray.concat(buffer_uint32(parseInt(commnum.slice(8,16),16)));
     	if (send_order == 1)
@@ -287,8 +303,7 @@ function protocolToRawData(json)
     	
     	else if (send_order == 10)
     		{  //下发任务
-			 payloadArray = payloadArray.concat(comm_serial);
-			 orderstr = orderstr + comm_addr;
+			 orderstr = ("00"+commaddr.toString(16)).slice(-2);
 			 orderstr = orderstr + "100129000D1A"; //10-指令，0129-起始地址（40298-1），寄存器数量-000D，字节数-1A
 			 orderstr = orderstr + "0001";			//远程指令
 			 var areaarray = [];
@@ -297,11 +312,11 @@ function protocolToRawData(json)
 			 var waternum = params.schedule_irrigate_num;
 			 var waterinterval = params.schedule_irrigate_interval;
 			 var fertnum = params.schedule_fertilize_num;
-			 var task_type = params.schedule_fertilize_num;
+			 var tasktype = params.task_type;
 			 
-      		 for (i=0;i16;i++)
+      		 for (i=0;i<16;i++)
 	      		 {
-      			 if ((i+1) in areaarray )
+      			 if (areaarray.indexOf(String(i+1)) >=0)
       			 	{
       				 	taskarea = "1" + taskarea;
       				 	continue;
@@ -311,19 +326,28 @@ function protocolToRawData(json)
       				 	taskarea = "0" + taskarea;
       			 	}
 	      		 }
-      		 
-      		orderstr = orderstr + ("0000"+parseInt(taskarea,2).toString(16)).slice(-4);	//灌区
+      		taskarea=parseInt(taskarea,2)
+      		orderstr = orderstr + ("0000"+taskarea.toString(16)).slice(-4);	//灌区
       		orderstr = orderstr + "0000";	//状态
-      		
       		orderstr = orderstr + ("0000"+parseInt(waternum).toString(16)).slice(-4);	//灌溉设定量
       		orderstr = orderstr + ("0000"+parseInt(waterinterval).toString(16)).slice(-4);	//灌溉设定时长
-      		console.log("waterinterva:"+String(waterinterval));
-      		console.log(orderstr);
       		orderstr = orderstr + ("0000"+parseInt(fertnum).toString(16)).slice(-4);	//施肥量
-      		console.log("fertnum:"+String(fertnum));
       		orderstr = orderstr + "000000000000000000000000";	//设定日期
-      		orderstr = orderstr + ("0000"+parseInt(task_type).toString(16)).slice(-4);	//任务类型
-      		payloadArray = payloadArray + orderstr + ToModbusCRC16(orderstr);	//CRC验证
+      		orderstr = orderstr + ("0000"+parseInt(tasktype).toString(16)).slice(-4);	//任务类型
+      		orderstr = orderstr + ToModbusCRC16(orderstr);	//CRC验证
+      		payloadArray = payloadArray.concat(buffer_uint8(commaddr));
+      		payloadArray = payloadArray.concat(buffer_uint32(parseInt("10012900",16)));
+      		payloadArray = payloadArray.concat(buffer_uint32(parseInt("0D1A0001",16)));
+      		payloadArray = payloadArray.concat(buffer_uint16(taskarea));
+      		payloadArray = payloadArray.concat(buffer_uint16(0));
+      		payloadArray = payloadArray.concat(buffer_uint16(waternum));
+      		payloadArray = payloadArray.concat(buffer_uint16(waterinterval));
+      		payloadArray = payloadArray.concat(buffer_uint16(fertnum));
+      		payloadArray = payloadArray.concat(buffer_uint32(0));
+      		payloadArray = payloadArray.concat(buffer_uint16(0));
+      		payloadArray = payloadArray.concat(buffer_uint16(0));
+      		payloadArray = payloadArray.concat(buffer_uint16(tasktype));
+      		payloadArray = payloadArray.concat(buffer_uint16(parseInt(ToModbusCRC16(orderstr),16)));
       		}
     	} 
     else if (method ==  ALINK_PROP_REPORT_METHOD) { //设备上报数据返回结果
@@ -340,3 +364,4 @@ function protocolToRawData(json)
     //console.log(payloadArray); /*10进制转换成8进制*/
     return payloadArray;
 }
+Test()
