@@ -1083,7 +1083,6 @@ def SFJ_sendorder(devtype,onedata):
                         showinfo=mymodule.getcurrtime()+' '+'SFJ('+comm_sn + ')'+'send task succeed'
                         mymodule.create_log(showinfo)
                         break
- 
                     else:
                         sendtimes=sendtimes+1
                         sleep(60)
@@ -2215,7 +2214,7 @@ def get_devinfo():
                                 devindex=0
                                 break
                     if devindex==-1 or len(controller_list)==0:
-                        onecomm=controller_class(onedata[0],onedata[1],onedata[2],onedata[3],onedata[4],0,0,'0',20)
+                        onecomm=controller_class(onedata[0],onedata[1],int(onedata[2]),onedata[3],onedata[4],0,0,'0',20)
                         controller_list.append(onecomm)
             reccursor.close()                 
             recconn.close() 
@@ -2364,7 +2363,7 @@ def recv_link(sock,addr):
     handle_data_scheduler=BackgroundScheduler()
     existcontroller = 0
     existsensor = 0
-    while True:
+    while sendtimes <= 10:
         try:
             sleep(0.5)
             conn_index = -1
@@ -2465,8 +2464,8 @@ def recv_link(sock,addr):
                             sock.sendall(bytes().fromhex(sendstr)) 
                         bResult=create_sock(sock,addr,comm_sn) 
                     else:
-                        illegaltimes= illegaltimes + 1
-                        showinfo =mymodule.getcurrtime() + ' receive client (' + comm_sn + ')' +' error connect data: ' + sdata +' ' + str(illegaltimes) +' times.'                 
+                        sendtimes= sendtimes + 1
+                        showinfo =mymodule.getcurrtime() + ' receive client (' + comm_sn + ')' +' error connect data: ' + sdata +' ' + str(sendtimes) +' times.'                 
                         mymodule.create_log(showinfo)
                     commtype = comm_list[comm_index].commtype
                     if comm_list[comm_index].sensormax != None and  comm_list[comm_index].sensormax != 'NULL':
@@ -2485,8 +2484,9 @@ def recv_link(sock,addr):
                         handle_data_scheduler.start()
     #异常数据,是否需要退出
         except Exception as e:
-            showinfo=mymodule.getcurrtime() + ' receive data exception:'+str(e)
+            showinfo=mymodule.getcurrtime() + ' receive data exception:('+addr[0]+':'+str(addr[1])+')'+str(e)
             mymodule.create_log(showinfo)
+            sendtimes=sendtimes+1
     if existsensor:
         handle_data_scheduler.remove_job('sensor'+comm_sn)
     elif existcontroller:
